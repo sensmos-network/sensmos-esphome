@@ -153,10 +153,11 @@ Each `- platform: sensmos` entry = one remote entity → one ESPHome sensor. Add
 |---|---|
 | 🌐 Website | https://sensmos.com |
 | 🗺️ Live map | https://sensmos.com/map/ |
-| 📱 App | https://github.com/Galusz/sensmos-app |
-| 🔌 Firmware | https://github.com/Galusz/sensmos-firmware |
-| 🏠 Home Assistant | https://github.com/Galusz/sensmos-homeassistant |
-| 📜 Protocol | https://github.com/Galusz/sensmos-protocol |
+| 📱 App | https://github.com/sensmos-network/sensmos-app |
+| 🔌 Firmware | https://github.com/sensmos-network/sensmos-firmware |
+| 🏠 Home Assistant | https://github.com/sensmos-network/sensmos-homeassistant |
+| 🧩 Hub (node in Docker / HA add-on) | https://github.com/sensmos-network/sensmos-hub |
+| 📜 Protocol | https://github.com/sensmos-network/sensmos-protocol |
 | 💬 Discord | https://discord.gg/ukea386Kqx |
 
 GALU runs on Polygon. © 2026 Sensmos.
