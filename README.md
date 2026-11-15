@@ -333,6 +333,33 @@ automation:
 
 Watering in the morning, once a day, keeps radio use to two commands a day. Hub 0.2.0-beta6 or newer gives `soil` the moisture device class.
 
+### Recipe: apiary (hive scale)
+
+[`examples/lora-pasieka.yaml`](examples/lora-pasieka.yaml): a load cell under the hive with an HX711 (the board powers it only while weighing), a DS18B20 in the brood nest (about 34–35 °C in season means the colony is alive) and an SW-420 vibration sensor that wakes the board when someone lifts or tips the hive. The board sleeps on an 18650 cell, best with a small 5 V solar panel, wakes every 30 minutes, weighs and sends one frame. Calibrate with two raw readings (empty and a known weight) and keep the tare of the empty hive in Home Assistant. You get `sensor.sensmos_lora_11_kg`, `…_t`, `…_mv` (1 = woken by a shock) and `…_v`. Daily gain and a swarm alert come from stock HA integrations:
+
+```yaml
+sensor:
+  - platform: statistics
+    name: Hive gain 24h
+    entity_id: sensor.sensmos_lora_11_kg
+    state_characteristic: change
+    max_age: { hours: 24 }
+  - platform: statistics
+    name: Hive change 1h
+    entity_id: sensor.sensmos_lora_11_kg
+    state_characteristic: change
+    max_age: { hours: 1 }
+automation:
+  - alias: Possible swarm
+    trigger: { platform: numeric_state, entity_id: sensor.hive_change_1h, below: -1.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "The hive lost {{ states('sensor.hive_change_1h') }} kg in an hour: a swarm?" } }
+  - alias: Hive moved
+    trigger: { platform: state, entity_id: sensor.sensmos_lora_11_mv, to: "1" }
+    action: { service: notify.mobile_app_phone, data: { message: "Someone is moving the hive" } }
+```
+
+Hub 0.2.0-beta6 or newer gives `kg` the weight device class.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

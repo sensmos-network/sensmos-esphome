@@ -1,0 +1,136 @@
+# Pasieka: waga ula, temperatura w gnieździe i „ktoś rusza ul” przez LoRa Sensmos, na baterii, bez Wi-Fi w pasiece.
+# Płytka śpi (deep sleep), budzi się co 30 min albo od wstrząsu, waży, wysyła jedną ramkę i znów zasypia.
+#
+# WAGA: belka tensometryczna pod ulem (jedna belka 100–200 kg albo cztery czujniki 50 kg w mostku) + moduł HX711.
+#   HX711: DT na GPIO5, SCK na GPIO6, VCC z GPIO2 (płytka włącza wagę tylko na czas pomiaru, w śnie waga nie bierze prądu),
+#   GND do GND. Kalibracja: odczytaj surową wartość w logach bez ciężaru (raw_0) i z odważnikiem, np. 10 kg (raw_10),
+#   i wpisz niżej. Po postawieniu ula z ramkami tarę robisz w HA (pomocnik „waga pustego ula”), nie w płytce.
+# TEMPERATURA: DS18B20 w gnieździe (między ramkami w środku kłębu) na GPIO4, rezystor 4,7 kΩ do 3,3 V.
+#   Około 34–35 °C w sezonie znaczy, że czerw jest i rodzina żyje.
+# WSTRZĄS: czujnik drgań SW-420 na GPIO7 (zasilanie 3,3 V): budzi płytkę, gdy ktoś podnosi albo przewraca ul.
+# ZASILANIE: ogniwo 18650 w gnieździe akumulatora Heltec V3, najlepiej z małym panelem słonecznym 5 V.
+#
+# W Home Assistant (sub 11): sensor.sensmos_lora_11_kg (waga), …_t (°C w gnieździe), …_mv (1 = obudził go wstrząs),
+# …_v (ogniwo). Przyrost dzienny, alarm rójki (nagły spadek wagi) i alarm ruszenia ula: README, sekcja „Recipes”.
+substitutions:
+  sub: "11"
+  raw_0: "-81500"      # surowy odczyt HX711 bez ciężaru
+  raw_10: "-312700"    # surowy odczyt z odważnikiem 10 kg
+  every: 30min
+
+esphome:
+  name: pasieka-lora
+  on_boot:
+    priority: -100
+    then:
+      - output.turn_on: scale_power
+      - delay: 1500ms                          # HX711 i belka się ustalają
+      - component.update: hive_raw
+      - delay: 500ms
+      - component.update: hive_raw
+      - component.update: brood
+      - delay: 1s                              # DS18B20 mierzy ok. 750 ms
+      - component.update: vbat
+      - component.update: moved
+      - output.turn_off: scale_power
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora
+      - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${every}
+  wakeup_pin: GPIO7
+  wakeup_pin_mode: INVERT_WAKEUP               # ul jeszcze drga przy zasypianiu: czekamy na zmianę stanu
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą ula.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+output:
+  - platform: gpio
+    id: scale_power
+    pin: GPIO2
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+sensor:
+  - platform: hx711
+    id: hive_raw
+    dout_pin: GPIO5
+    clk_pin: GPIO6
+    gain: 128
+    update_interval: never                     # ważymy raz na pobudkę, w on_boot
+    filters:
+      - calibrate_linear:
+          - ${raw_0} -> 0
+          - ${raw_10} -> 10
+  - platform: dallas_temp
+    id: brood
+    update_interval: never
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    filters:
+      - multiply: 4.9
+  - platform: template
+    id: moved
+    update_interval: never
+    lambda: |-
+      return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? 1.0f : 0.0f;
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}                      # numer czujnika: encje sensor.sensmos_lora_11_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: hive_raw
+      key: kg
+      decimals: 2
+    - sensor: brood
+      key: t
+    - sensor: moved
+      key: mv
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
