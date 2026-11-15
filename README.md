@@ -360,6 +360,10 @@ automation:
 
 Hub 0.2.0-beta6 or newer gives `kg` the weight device class.
 
+### Recipe: cold room, display fridge, freezer
+
+[`examples/lora-chlodnia.yaml`](examples/lora-chlodnia.yaml): two waterproof DS18B20 probes on one bus (a cold room `t` and a freezer `t2`) and a door reed, every 5 minutes and on every door change, USB-powered from the socket next to the appliance, no Wi-Fi in the back room. Keep the board outside the cold. In Home Assistant the Sensmos blueprint [`chlodnia`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/chlodnia.yaml) raises the alarms (too warm for longer than a door opening, back to normal, no reading), and the log is HA's own history with CSV download. For HACCP records compare the probes with a calibrated thermometer. Hub 0.2.0-beta6 or newer gives `t2` the temperature class.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

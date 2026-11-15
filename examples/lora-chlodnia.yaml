@@ -1,0 +1,96 @@
+# Chłodnia, lada chłodnicza, zamrażarka w małej gastronomii albo w sklepie: temperatura i drzwi przez LoRa Sensmos.
+# Bez Wi-Fi w zapleczu i bez abonamentu. Odczyt co 5 minut, drzwi od razu po zmianie. Historia zostaje w Home Assistant
+# (panel Historia → pobierz CSV), alarm progów i braku odczytów robi blueprint HA „chlodnia” (sensmos-homeassistant).
+#
+# CZUJNIKI: dwa DS18B20 w wersji wodoodpornej (sonda w rurce) na jednej magistrali GPIO6, rezystor 4,7 kΩ do 3,3 V.
+#   Przewód wprowadź przez uszczelkę drzwi płaskim odcinkiem albo przez otwór odpływu. Adresy sond odczytasz w logach
+#   ESPHome po pierwszym uruchomieniu i wpiszesz niżej.
+# DRZWI: kontaktron między GPIO5 a GND (zwarty = zamknięte).
+# ZASILANIE: zasilacz USB z gniazda przy urządzeniu. Płytkę trzymaj na zewnątrz komory (zimno i wilgoć szkodzą baterii
+#   i radiu), antenę skieruj w stronę noda.
+# Pomiar służy do własnej kontroli. Do dokumentacji HACCP używaj termometru z aktualnym świadectwem wzorcowania
+# i porównuj z nim sondy co jakiś czas.
+#
+# W Home Assistant (sub 12): sensor.sensmos_lora_12_t (komora), …_t2 (zamrażarka), …_door (1 = otwarte).
+substitutions:
+  sub: "12"
+
+esphome:
+  name: chlodnia-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO6
+
+sensor:
+  - platform: dallas_temp
+    id: cold_room
+    address: 0x1c0000031edd2a28    # sonda w komorze: wpisz adres z logów
+    update_interval: 60s
+    filters:
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+  - platform: dallas_temp
+    id: freezer
+    address: 0x5e0000031e8b4f28    # sonda w zamrażarce: wpisz adres z logów
+    update_interval: 60s
+
+binary_sensor:
+  - platform: gpio
+    id: door
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on_off: 1s
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 5min
+  sensors:
+    - sensor: cold_room
+      key: t
+    - sensor: freezer
+      key: t2
+  binary_sensors:
+    - sensor: door
+      key: door
