@@ -304,6 +304,35 @@ For the gate, change the message to "Someone opened the gate" and give the board
 
 [`examples/lora-przycisk.yaml`](examples/lora-przycisk.yaml): a big mushroom button by a bed, in a garden shed or a workshop, where there is no Wi-Fi. Hold it for 2 s and the board sends `alarm=1`, repeating it every minute (at most 5 times) until someone accepts. Two short presses send `alarm=0` (all fine). The board also has a switch `ack`: the Home Assistant blueprint [`przycisk_alarmu`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/przycisk_alarmu.yaml) notifies the phones you choose with an **I'm on it** action, escalates to a second group, and sends `ack=1` back by your node's radio: the LED stays on and a buzzer beeps, so the person knows help is coming. Power it from USB, because the board keeps listening for the confirmation. It is built from stock ESPHome parts (`binary_sensor` with `on_multi_click`, `script`, `status_led`, a template `switch`) plus `sensmos_lora`. This is help from family and neighbours, not an emergency service: it does not replace 112.
 
+### Recipe: greenhouse and garden watering
+
+[`examples/lora-szklarnia.yaml`](examples/lora-szklarnia.yaml): a capacitive soil moisture sensor (in %, calibrated with two readings: dry air and a glass of water), a DS18B20 and a 12 V normally closed solenoid valve on a relay, all on stock ESPHome parts. Readings go to Home Assistant at home, and the valve is a `switches:` entry, so HA opens it by your node's radio, as in [Switches over radio](#switches-over-radio). The board closes the valve by itself after `max_open` (20 min), even if the radio goes quiet, and always starts closed. It keeps listening, so it needs steady power (mains or a solar panel with a battery). You get `sensor.sensmos_lora_10_soil`, `…_t`, and the valve state `valve=1/0` in `sensor.<node>_lora_data_frame_sub_10`.
+
+```yaml
+template:
+  - switch:
+      - name: Greenhouse valve
+        state: "{{ 'valve=1' in (states('sensor.home_node_lora_data_frame_sub_10') or '').split(';') }}"
+        turn_on:
+          - action: sensmos.lora_send
+            data: { dst: a1b2c3d4, sub: 10, aes: true, payload: "c={{ now().timestamp() | int }};valve=1" }
+        turn_off:
+          - action: sensmos.lora_send
+            data: { dst: a1b2c3d4, sub: 10, aes: true, payload: "c={{ now().timestamp() | int }};valve=0" }
+automation:
+  - alias: Water the greenhouse when dry
+    trigger: { platform: time, at: "06:30:00" }
+    condition: { condition: numeric_state, entity_id: sensor.sensmos_lora_10_soil, below: 35 }
+    action:
+      - action: switch.turn_on
+        target: { entity_id: switch.greenhouse_valve }
+      - delay: "00:10:00"
+      - action: switch.turn_off
+        target: { entity_id: switch.greenhouse_valve }
+```
+
+Watering in the morning, once a day, keeps radio use to two commands a day. Hub 0.2.0-beta6 or newer gives `soil` the moisture device class.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

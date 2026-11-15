@@ -1,0 +1,115 @@
+# Szklarnia, tunel foliowy, ogródek na działce: wilgotność gleby, temperatura i zawór podlewania przez LoRa Sensmos.
+# Bez Wi-Fi na działce. Odczyty idą do Home Assistant w domu, a zawór otwiera automatyzacja HA radiem Twojego noda
+# (switches: jak w lora-przelacznik.yaml). Płytka sama zamyka zawór po max_open, nawet gdy radio zamilknie.
+#
+# CZUJNIK GLEBY: pojemnościowy (Capacitive Soil Moisture v1.2/v2.0, nie rezystancyjny, bo ten koroduje w kilka tygodni),
+#   zasilanie 3,3 V, wyjście AOUT na GPIO4. Kalibracja: odczytaj napięcie w suchym powietrzu (dry_v) i w szklance wody
+#   (wet_v) w logach ESPHome i wpisz niżej.
+# TEMPERATURA: DS18B20 na GPIO6 (rezystor 4,7 kΩ do 3,3 V), np. w powietrzu szklarni albo wbity w grządkę.
+# ZAWÓR: elektrozawór 12 V NC (zamknięty bez prądu) przez moduł przekaźnika albo MOSFET na GPIO5. Zasilacz 12 V
+#   z przetwornicą na 5 V dla płytki; płytka stale słucha poleceń, więc potrzebuje stałego zasilania (sieć albo panel
+#   słoneczny z akumulatorem).
+#
+# W Home Assistant (sub 10): sensor.sensmos_lora_10_soil (% wilgotności gleby), …_t (°C), stan zaworu valve=1/0
+# w sensor.<nod>_lora_data_frame_sub_10. Przełącznik i automatyzacja „podlej, gdy sucho”: README, sekcja „Recipes”.
+substitutions:
+  sub: "10"
+  dry_v: "2.60"        # V w suchym powietrzu
+  wet_v: "1.20"        # V w wodzie
+  max_open: 20min      # bezpiecznik: zawór nigdy nie jest otwarty dłużej
+
+esphome:
+  name: szklarnia-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO6
+
+sensor:
+  - platform: adc
+    id: soil
+    pin: GPIO4
+    attenuation: 12db
+    samples: 16
+    update_interval: 60s
+    filters:
+      - median:
+          window_size: 5
+          send_every: 5
+      - calibrate_linear:
+          - ${dry_v} -> 0.0
+          - ${wet_v} -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+  - platform: dallas_temp
+    id: temp
+    update_interval: 60s
+
+switch:
+  - platform: gpio
+    id: valve
+    pin: GPIO5
+    restore_mode: ALWAYS_OFF       # po restarcie zawór zawsze zamknięty
+    on_turn_on:
+      - script.execute: valve_guard
+    on_turn_off:
+      - script.stop: valve_guard
+
+script:
+  - id: valve_guard                # każde otwarcie liczy max_open od nowa
+    mode: restart
+    then:
+      - delay: ${max_open}
+      - switch.turn_off: valve
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 Twojego noda Sensmos z radiem (to on nadaje polecenia zaworu)
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # fraza-klucz tego noda; w praktyce !secret sensmos_lora_key
+  update_interval: 10min
+  sensors:
+    - sensor: soil
+      key: soil
+      decimals: 0
+    - sensor: temp
+      key: t
+  switches:
+    - switch: valve
+      key: valve                   # polecenie z HA: c=<licznik>;valve=1 / valve=0
