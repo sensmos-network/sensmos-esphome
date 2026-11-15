@@ -408,6 +408,10 @@ automation:
     action: { service: notify.mobile_app_phone, data: { message: "PM2.5 {{ states('sensor.sensmos_lora_16_pm25') }} µg/m³ for an hour: close the windows" } }
 ```
 
+### Recipe: bike, trailer or machine tracker
+
+[`examples/lora-lokalizator.yaml`](examples/lora-lokalizator.yaml): ESPHome's stock `gps` (an ATGM336H or NEO-6M powered from the board's Vext, so it is off while the board sleeps) and an SW-420 vibration sensor. Parked, it sends one frame every 6 hours as a sign of life. When someone moves it, the shock wakes the board and it sends latitude, longitude, speed and satellites about every 3 minutes for as long as it keeps moving (about 0.6% airtime at SF11, under the 1% limit). The position is encrypted with your key phrase like every other frame. In Home Assistant the Sensmos blueprint [`lokalizator`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/lokalizator.yaml) puts it on the HA map as `device_tracker.sensmos_<name>` and warns when it leaves a zone. It works where a Sensmos node hears the board: it guards the area around home, the garage or the yard, not a whole country, so check the coverage with the messenger's range test first.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

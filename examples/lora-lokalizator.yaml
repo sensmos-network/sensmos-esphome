@@ -1,0 +1,144 @@
+# Lokalizator roweru, przyczepy, łódki albo maszyny: pozycja GPS przez LoRa Sensmos na mapie Home Assistant, bez karty SIM
+# i bez abonamentu. Stoi: jedna ramka co 6 h (znak życia). Ktoś rusza: wstrząs budzi płytkę, pozycja co ok. 3 min, dopóki
+# trwa ruch. Blueprint HA „lokalizator” (sensmos-homeassistant) kładzie pozycję na mapę HA i ostrzega, gdy rzecz wyjedzie
+# poza strefę. Działa tam, gdzie słyszy go jakiś nod Sensmos: to strażnik okolicy domu, garażu i placu, nie tracker
+# na całą Europę. Zasięg w terenie sprawdzisz komunikatorem (Test zasięgu do domu).
+#
+# GPS: moduł ATGM336H albo NEO-6M (3,3 V) zasilany z Vext płytki (GPIO36, płytka sama go wyłącza na czas snu),
+#   TX modułu → GPIO7, RX modułu → GPIO6. Antena GPS do nieba (pod siodełkiem, pod plandeką), nie pod metalem.
+# RUCH: czujnik drgań SW-420 na GPIO5 (zasilanie 3,3 V). Wstrząs budzi płytkę.
+# ZASILANIE: ogniwo 18650 w gnieździe akumulatora Heltec V3 (rower, przyczepa) albo przetwornica z akumulatora pojazdu.
+#
+# W Home Assistant (sub 17): sensor.sensmos_lora_17_lat, …_lon, …_spd (km/h), …_sat (satelity), …_mv (1 = wstrząs), …_v.
+substitutions:
+  sub: "17"
+  park: 6h             # postój: znak życia
+  park_ms: "21600000"  # to samo w ms (dla wyboru czasu snu)
+  moving_ms: "180000"  # w ruchu: pozycja co tyle (przy SF11 to ok. 0,6% czasu nadawania, poniżej limitu 1%)
+
+esphome:
+  name: lokalizator-lora
+  on_boot:
+    priority: -100
+    then:
+      - output.turn_on: vext
+      - wait_until:                            # fix GPS: zimny start do 90 s, potem co kilka sekund
+          condition:
+            lambda: "return !std::isnan(id(lat).state) && id(sats).state >= 4;"
+          timeout: 90s
+      - component.update: moved
+      - component.update: vbat
+      - sensmos_lora.send:
+      - delay: 1s
+      - output.turn_off: vext
+      - sx126x.set_mode_sleep: lora
+      - deep_sleep.enter:
+          id: sleepy
+          sleep_duration: !lambda |-
+            const bool go = id(moved).state > 0.5f || (!std::isnan(id(speed).state) && id(speed).state > 3.0f);
+            return go ? ${moving_ms} : ${park_ms};
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${park}
+  wakeup_pin: GPIO5
+  wakeup_pin_mode: INVERT_WAKEUP               # w czasie jazdy czujnik dalej drga: czekamy na zmianę stanu
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+output:
+  - platform: gpio                             # Vext: zasilanie modułu GPS (stan niski = włączone)
+    id: vext
+    pin:
+      number: GPIO36
+      inverted: true
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+uart:
+  rx_pin: GPIO7
+  tx_pin: GPIO6
+  baud_rate: 9600
+
+gps:
+  update_interval: 2s
+  latitude:
+    id: lat
+  longitude:
+    id: lon
+  speed:
+    id: speed                  # km/h
+  satellites:
+    id: sats
+
+sensor:
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    filters:
+      - multiply: 4.9
+  - platform: template
+    id: moved
+    update_interval: never
+    lambda: |-
+      return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? 1.0f : 0.0f;
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key (pozycja leci zaszyfrowana)
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: lat
+      key: lat
+      decimals: 4                  # ok. 10 m
+    - sensor: lon
+      key: lon
+      decimals: 4                  # ok. 10 m
+    - sensor: speed
+      key: spd
+      decimals: 0
+    - sensor: sats
+      key: sat
+      decimals: 0
+    - sensor: moved
+      key: mv
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
