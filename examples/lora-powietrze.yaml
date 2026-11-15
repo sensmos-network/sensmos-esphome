@@ -1,0 +1,103 @@
+# Stacja smogowa bez Wi-Fi: pył PM2.5 i PM10 z działki, ogródka, szkoły albo słupa w wiosce, przez LoRa Sensmos.
+# Odczyt idzie do Twojego Huba i do HA, a jeśli zaznaczysz go w Hubie jako udostępniony, trafia na mapę smogu
+# sensmos.com/map i do otwartych danych (CC BY 4.0, pseudonim stacji, pozycja zaokrąglona do ok. 1 km).
+# Masz w tym miejscu Wi-Fi? Wtedy lepszy jest gotowy firmware sensor.community; ten przepis jest dla miejsc bez sieci.
+#
+# CZUJNIK PYŁU: Nova SDS011 (5 V z pinu 5V płytki), TX czujnika → GPIO7, RX czujnika → GPIO6. Wentylator kręci się
+#   ok. 30 s przed każdym pomiarem, potem czujnik śpi (laser żyje kilka lat zamiast roku).
+# TEMPERATURA I WILGOTNOŚĆ: BME280 na I2C (SDA GPIO41, SCL GPIO42). Przy wilgotności powyżej ok. 85% (mgła) czujniki
+#   laserowe zawyżają pył; HA dostaje wilgotność, więc widać, kiedy odczyt jest niepewny.
+# MONTAŻ: czujnik w osłonie z rurką wlotu w dół (deszcz), 1,5–3 m nad ziemią, z dala od komina i grilla.
+# ZASILANIE: z USB albo zasilacza 5 V (wentylator za dużo bierze na samo ogniwo).
+#
+# W Home Assistant (sub 16): sensor.sensmos_lora_16_pm25, …_pm10 (µg/m³), …_t, …_h, …_p.
+substitutions:
+  sub: "16"
+  every: 10min
+
+esphome:
+  name: powietrze-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+uart:
+  rx_pin: GPIO7
+  tx_pin: GPIO6
+  baud_rate: 9600
+
+i2c:
+  sda: GPIO41
+  scl: GPIO42
+
+sensor:
+  - platform: sds011
+    update_interval: ${every}      # co 10 min: wentylator ok. 30 s, potem sen czujnika
+    pm_2_5:
+      id: pm25
+    pm_10_0:
+      id: pm10
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: ${every}
+    temperature:
+      id: temp
+    humidity:
+      id: hum
+    pressure:
+      id: pres
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: pm25
+      key: pm25
+      decimals: 1
+    - sensor: pm10
+      key: pm10
+      decimals: 1
+    - sensor: temp
+      key: t
+      decimals: 1
+    - sensor: hum
+      key: h
+      decimals: 0
+    - sensor: pres
+      key: p
+      decimals: 0

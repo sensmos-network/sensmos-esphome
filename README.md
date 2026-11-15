@@ -396,6 +396,18 @@ automation:
     action: { service: notify.mobile_app_phone, data: { message: "The tank lost {{ states('sensor.fuel_change_1h') | float | abs | round(0) }} L in an hour" } }
 ```
 
+### Recipe: smog station without Wi-Fi
+
+[`examples/lora-powietrze.yaml`](examples/lora-powietrze.yaml): PM2.5 and PM10 from an allotment, a school yard or a pole in a village with no Wi-Fi. ESPHome's stock `sds011` (Nova SDS011, its fan runs about 30 s before each reading every 10 minutes, then the sensor sleeps) and a BME280 for temperature, humidity and pressure, USB or 5 V powered. You get `sensor.sensmos_lora_16_pm25`, `…_pm10`, `…_t`, `…_h` and `…_p`. Tick the PM sensors as shared in the Hub and they join the smog heatmap on [sensmos.com/map](https://sensmos.com/map/) and the [open data](https://sensmos.com/open-data/) (station pseudonym, position rounded to about 1 km). Above about 85% humidity (fog) laser sensors read high, so look at `…_h` before trusting a peak. Where you do have Wi-Fi, the stock sensor.community firmware or the [PMS5003 example](#air-quality-smog--pms5003) above is simpler.
+
+```yaml
+automation:
+  - alias: Smog outside
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_16_pm25, above: 50, for: "01:00:00" }
+    condition: { condition: numeric_state, entity_id: sensor.sensmos_lora_16_h, below: 85 }
+    action: { service: notify.mobile_app_phone, data: { message: "PM2.5 {{ states('sensor.sensmos_lora_16_pm25') }} µg/m³ for an hour: close the windows" } }
+```
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.
