@@ -375,6 +375,27 @@ automation:
     action: { service: notify.mobile_app_phone, data: { message: "The electric fence stopped pulsing ({{ states('sensor.sensmos_lora_13_ppm') }}/min)" } }
 ```
 
+### Recipe: machinery yard and fuel tank
+
+[`examples/lora-plac-maszyn.yaml`](examples/lora-plac-maszyn.yaml): the tank level from [the tank recipe](#recipe-tank-level-septic-tank-rainwater-well) plus an SW-420 vibration sensor bolted to a machine or the yard gate. The board sleeps on an 18650 cell with a small solar panel, wakes every 30 minutes or on a shock and sends the level in % and litres and `mv` (1 = woken by a shock). **Diesel, heating oil or AdBlue only:** never put electronics over petrol, the vapour is explosive. A night-time alarm and a fuel-drop alarm come from stock HA:
+
+```yaml
+sensor:
+  - platform: statistics
+    name: Fuel change 1h
+    entity_id: sensor.sensmos_lora_15_l
+    state_characteristic: change
+    max_age: { hours: 1 }
+automation:
+  - alias: Machine moved at night
+    trigger: { platform: state, entity_id: sensor.sensmos_lora_15_mv, to: "1" }
+    condition: { condition: time, after: "21:00:00", before: "05:00:00" }
+    action: { service: notify.mobile_app_phone, data: { message: "Someone is moving a machine on the yard" } }
+  - alias: Fuel dropped
+    trigger: { platform: numeric_state, entity_id: sensor.fuel_change_1h, below: -50 }
+    action: { service: notify.mobile_app_phone, data: { message: "The tank lost {{ states('sensor.fuel_change_1h') | float | abs | round(0) }} L in an hour" } }
+```
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.
