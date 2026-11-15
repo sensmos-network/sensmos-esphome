@@ -121,6 +121,51 @@ sensmos_key: "paste-your-48-char-passkey-here-xxxxxxxxxxxx"
 
 > Got a battery/BMS, solar inverter, weather station…? Same pattern — give the sensors an `id:` and map them to `pub.batt_soc`, `pub.pv_power`, `pub.temp_out`, etc.
 
+## LoRa sensor without Wi-Fi (`sensmos_lora`)
+
+Put a sensor where Wi-Fi does not reach (garage, basement, allotment, septic tank) and still get it in Home Assistant. The `sensmos_lora` component sends your ESPHome readings **by radio** on the Sensmos home channel. Any Sensmos node in range hears the frame, the network delivers it to **your Hub or node**, and that turns it into entities `sensor.sensmos_lora_<sub>_<key>` in Home Assistant. The payload is encrypted end-to-end with your key phrase (AES-256-CTR, the same frame format as the node firmware); relaying nodes and the server only see ciphertext.
+
+Needs a board with an **SX1262** radio (Heltec V3, XIAO ESP32-S3 + SX1262, LilyGO T3-S3, RAK3312…) and ESPHome 2025.7 or newer (built-in `sx126x` component).
+
+```yaml
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+# Sensmos home channel (EU868). Keep these values or the nodes will not hear you.
+sx126x:
+  # cs/rst/busy/dio1 pins, hw_version, rf_switch, tcxo_voltage: see your board
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  crc_enable: true
+  pa_power: 14
+
+sensmos_lora:
+  hub: "a1b2c3d4"              # first 8 hex chars of your Hub / node id (shown in the app and in the Hub log)
+  sub: 1                       # sensor number 1-255 -> sensor.sensmos_lora_1_*
+  key: !secret sensmos_lora_key # same phrase as the Hub option lora_key (or the node's LoRa key)
+  update_interval: 10min       # min 2min
+  sensors:
+    - sensor: temperature
+      key: t                   # t, h, p, bat, v, co2, lux, pm25, pm10 get units in HA
+  binary_sensors:
+    - sensor: door
+      key: door                # a state change is sent right away (at most every 30 s)
+```
+
+Full working example for the Heltec V3: [`examples/lora-heltec-v3.yaml`](examples/lora-heltec-v3.yaml).
+
+- **Payload:** `t=21.5;h=40;door=1`, up to 128 bytes (readings that do not fit are skipped). `decimals:` per sensor (default 1).
+- **Airtime:** at SF11 a typical frame is about 1 s on air. The 868.0–868.6 MHz band allows 1% (36 s per hour), so the component keeps its own budget (`max_airtime_per_hour`, default 30 s) and skips a send rather than break the limit.
+- **Radio check:** at compile time the component refuses an `sx126x` config that is not on the home channel or above 14 dBm. `check_radio: false` turns that off (for tests only).
+- **Send on demand:** `- sensmos_lora.send:` in any automation, optionally with `extra: "alarm=1"`.
+- **Reception:** the frame needs a Sensmos node in range listening on the home channel. Nodes in Point mode and LoRaWAN gateways do that all the time; other nodes rotate channels and hear it part of the time.
+- **Tests:** `node --test tests/frame.test.js` builds the frame in C++ and decodes it with the Hub's own code (needs `g++`, OpenSSL and `sensmos-hub` checked out next to this repo).
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

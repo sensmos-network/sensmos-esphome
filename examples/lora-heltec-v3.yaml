@@ -1,0 +1,75 @@
+# Czujnik LoRa Sensmos na Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262).
+# Odczyty idą radiem do najbliższego noda Sensmos, a stamtąd do twojego Huba i Home Assistant.
+# Wi-Fi na miejscu nie jest potrzebne. Zamień hub i key na swoje (opcja lora_key w Hubie).
+esphome:
+  name: dzialka-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: internal_temperature
+    id: temp_chip
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    filters:
+      - multiply: 4.9
+    update_interval: 60s
+
+binary_sensor:
+  - platform: gpio
+    id: door
+    pin:
+      number: GPIO0
+      inverted: true
+      mode: INPUT_PULLUP
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 1                           # numer czujnika: encje sensor.sensmos_lora_1_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 10min
+  sensors:
+    - sensor: temp_chip
+      key: t
+    - sensor: vbat
+      key: v
+      decimals: 2
+  binary_sensors:
+    - sensor: door
+      key: door                    # zmiana stanu nadaje od razu (najczęściej co 30 s)
