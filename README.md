@@ -14,7 +14,7 @@ You add a `sensmos:` block with a **passkey** and a list of `sensor id → entit
 
 ```yaml
 external_components:
-  - source: github://Galusz/sensmos-esphome@main
+  - source: github://sensmos-network/sensmos-esphome@main
 ```
 
 ## Configure
@@ -61,7 +61,7 @@ Maps to native `pub.pm25` / `pub.pm10`, so it joins the air-quality heatmap on t
 
 ```yaml
 external_components:
-  - source: github://Galusz/sensmos-esphome@main
+  - source: github://sensmos-network/sensmos-esphome@main
 
 uart:
   rx_pin: GPIO16
@@ -93,7 +93,7 @@ Just the ESP's own uptime + WiFi signal, to see a node appear on the map in a mi
 
 ```yaml
 external_components:
-  - source: github://Galusz/sensmos-esphome@main
+  - source: github://sensmos-network/sensmos-esphome@main
 
 sensor:
   - platform: uptime
@@ -414,7 +414,7 @@ The other direction: pull a value another node publishes and expose it as a norm
 
 ```yaml
 external_components:
-  - source: github://Galusz/sensmos-esphome@main
+  - source: github://sensmos-network/sensmos-esphome@main
 
 sensor:
   - platform: sensmos
