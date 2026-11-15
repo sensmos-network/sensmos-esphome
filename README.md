@@ -220,6 +220,17 @@ automation:
 
 The silence alarm only means something if a node keeps listening: put one Sensmos node in range in **Point mode** (app → node → LoRa → frame reception). A node in the default scanner mode hears the home channel only part of each hour.
 
+### Recipe: tank level (septic tank, rainwater, well)
+
+[`examples/lora-szambo.yaml`](examples/lora-szambo.yaml): a waterproof ultrasonic sensor (JSN-SR04T) in the lid measures the distance to the surface, and the board sends the level in %, litres, the raw distance and the battery every 30 minutes. Enter three numbers from a tape measure (`empty_cm`, `full_cm`, `liters`) and the shape: `0` for a box or upright cylinder, `1` for a cylinder lying on its side, where litres come from the circle segment. You get `sensor.sensmos_lora_4_lvl`, `…_l`, `…_d` and `…_v`.
+
+```yaml
+automation:
+  - alias: Septic tank 80%
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_4_lvl, above: 80 }
+    action: { service: notify.mobile_app_phone, data: { message: "Septic tank is {{ states('sensor.sensmos_lora_4_lvl') }}% full, time to book the truck" } }
+```
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

@@ -1,0 +1,116 @@
+# Szambo, zbiornik na deszczówkę, studnia: poziom w % i litrach przez LoRa Sensmos, bez Wi-Fi.
+# Czujnik: wodoodporny ultradźwiękowy JSN-SR04T (albo AJ-SR04M) nad lustrem cieczy, w pokrywie zbiornika.
+# Płytka: Heltec WiFi LoRa 32 V3. Zasilanie z akumulatora z panelem albo z sieci.
+# W Home Assistant (sub 4): sensor.sensmos_lora_4_lvl (%), …_l (litry), …_d (cm do lustra), …_v (bateria).
+# Alarm progu, np. „szambo 80%”, ustawiasz w HA (README, „Recipe: tank level”). Hub doda też alarm ciszy.
+#
+# KALIBRACJA: zmierz i wpisz trzy liczby niżej (substitutions):
+#   empty_cm: odległość od czujnika do dna (pusty zbiornik), full_cm: do lustra przy pełnym,
+#   liters: pojemność. shape: 0 = prostopadłościan / pionowy walec (poziom liniowy),
+#   1 = leżący walec (beczka na boku: litry z przekroju koła).
+substitutions:
+  empty_cm: "200"
+  full_cm: "30"
+  liters: "6000"
+  shape: "0"
+
+esphome:
+  name: szambo-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: ultrasonic           # JSN-SR04T: TRIG na GPIO6, ECHO na GPIO7 (przez dzielnik 5 V → 3,3 V)
+    id: dist
+    trigger_pin: GPIO6
+    echo_pin: GPIO7
+    timeout: 4m
+    update_interval: 60s
+    unit_of_measurement: cm
+    filters:
+      - multiply: 100              # m → cm
+      - median:                    # piana i krople dają pojedyncze złe odczyty
+          window_size: 5
+          send_every: 5
+  - platform: template
+    id: level
+    unit_of_measurement: "%"
+    update_interval: 60s
+    lambda: |-
+      if (std::isnan(id(dist).state)) return NAN;
+      const float e = ${empty_cm}, f = ${full_cm};
+      float h = (e - id(dist).state) / (e - f);          // 0 = pusty, 1 = pełny
+      if (h < 0) h = 0;
+      if (h > 1) h = 1;
+      return h * 100.0f;
+  - platform: template
+    id: litres
+    unit_of_measurement: L
+    update_interval: 60s
+    lambda: |-
+      if (std::isnan(id(level).state)) return NAN;
+      const float h = id(level).state / 100.0f;
+      if (${shape} == 0) return h * ${liters};
+      // Leżący walec: pole odcinka koła o wysokości h (w średnicach) / pole koła.
+      const float a = 2.0f * acosf(1.0f - 2.0f * h);
+      return (a - sinf(a)) / (2.0f * (float) M_PI) * ${liters};
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    filters:
+      - multiply: 4.9
+    update_interval: 60s
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 4                           # numer czujnika: encje sensor.sensmos_lora_4_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 30min           # poziom zmienia się wolno; rzadziej = mniej czasu w eterze
+  sensors:
+    - sensor: level
+      key: lvl
+      decimals: 0
+    - sensor: litres
+      key: l
+      decimals: 0
+    - sensor: dist
+      key: d
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
