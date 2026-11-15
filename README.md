@@ -262,6 +262,27 @@ automation:
 
 The car body blocks radio, so put the antenna under the windscreen. This is a notification, not a car alarm or a tracker: a frame can be lost, and when the car drives away, it is out of range.
 
+### Recipe: camper, trailer, boat
+
+[`examples/lora-kamper.yaml`](examples/lora-kamper.yaml): a winter-storage profile. A BME280 measures temperature, humidity and pressure, a reed switch watches the door (or a locker) and wakes the board when it opens, a leak probe sits in the bilge or under the water tank, and a divider measures the leisure battery. The board sleeps, sends every 30 minutes and on every door opening, and sleeps 6 hours when the battery is below 11.8 V. Power comes from the leisure battery through a low-quiescent step-down converter, or from an 18650 cell. You get `sensor.sensmos_lora_7_t`, `…_h`, `…_p`, `…_v12`, `…_door`, `…_leak` and `…_v`.
+
+```yaml
+automation:
+  - alias: Camper frost
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_7_t, below: 2 }
+    action: { service: notify.mobile_app_phone, data: { message: "Camper is at {{ states('sensor.sensmos_lora_7_t') }} °C, drain the water" } }
+  - alias: Camper damp
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_7_h, above: 75, for: "48:00:00" }
+    action: { service: notify.mobile_app_phone, data: { message: "Humidity in the camper has been above 75% for 2 days" } }
+  - alias: Camper door or water
+    trigger:
+      - { platform: state, entity_id: sensor.sensmos_lora_7_door, to: "1" }
+      - { platform: state, entity_id: sensor.sensmos_lora_7_leak, to: "1" }
+    action: { service: notify.mobile_app_phone, data: { message: "Camper: {{ trigger.to_state.name }} changed to 1" } }
+```
+
+Storage yards are often out of range of any node. Check first with a node in Point mode near the yard, or ask a neighbour there to run one.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

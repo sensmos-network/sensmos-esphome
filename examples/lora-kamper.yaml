@@ -1,0 +1,160 @@
+# Kamper, przyczepa, łódka na zimowisku: wilgoć, mróz, drzwi, woda w zęzie i akumulator przez LoRa Sensmos.
+# Płytka śpi (deep sleep), budzi się co 30 min albo od otwarcia drzwi, wysyła jedną ramkę i znów zasypia.
+#
+# ZASILANIE: akumulator pokładowy (12 V) przez przetwornicę step-down na 5 V o małym poborze bez obciążenia
+#   (poniżej 1 mA, np. Pololu D36V6F5) i bezpiecznik 1 A. Bez akumulatora: ogniwo 18650 na złączu baterii płytki
+#   (wtedy bez dzielnika 12 V, v12 pokaże 0).
+# CZUJNIKI:
+#   BME280 (temperatura, wilgotność, ciśnienie) na I2C: SDA GPIO41, SCL GPIO42, zasilanie 3,3 V.
+#   Kontaktron drzwi (albo bakisty) na GPIO7 i GND: budzi płytkę przy otwarciu.
+#   Sonda zalania (dwa druty w zęzie łódki albo pod zbiornikiem wody) na GPIO5 i GND.
+#   Akumulator pokładowy: dzielnik 100 kΩ / 22 kΩ, środek na GPIO4.
+# Płytka: Heltec WiFi LoRa 32 V3. Antena przy oknie albo na zewnątrz: blacha i laminat tłumią radio.
+#
+# W Home Assistant (sub 7): sensor.sensmos_lora_7_t, …_h (wilgotność), …_p, …_v12, …_door (1 = otwarte),
+# …_leak (1 = woda), …_v (zasilanie płytki). Hub dorzuca binary_sensor.sensmos_lora_7_silent.
+# Progi alarmów (mróz, wilgoć) ustawiasz w HA, przykłady w README („Recipe: camper, trailer, boat”).
+substitutions:
+  low_v: "11.8"        # V: poniżej tego oszczędzamy akumulator (sen 6 h)
+  every: 30min
+
+esphome:
+  name: kamper-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - component.update: env
+      - component.update: v12
+      - component.update: vbat
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora
+      - if:
+          condition:
+            lambda: "return id(v12).state > 5.0f && id(v12).state < ${low_v};"
+          then:
+            - deep_sleep.enter:
+                id: sleepy
+                sleep_duration: 6h
+          else:
+            - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${every}
+  wakeup_pin:
+    number: GPIO7
+    allow_other_uses: true
+  wakeup_pin_mode: INVERT_WAKEUP               # drzwi zostawione otwarte nie budzą płytki w kółko
+
+i2c:
+  sda: GPIO41
+  scl: GPIO42
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: bme280_i2c
+    id: env
+    address: 0x76
+    update_interval: never
+    temperature:
+      id: temp
+    humidity:
+      id: hum
+    pressure:
+      id: pres
+  - platform: adc
+    id: v12
+    pin: GPIO4
+    attenuation: 12db
+    samples: 16
+    update_interval: never
+    filters:
+      - multiply: 5.545                        # (100k + 22k) / 22k; dopasuj do multimetru
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    update_interval: never
+    filters:
+      - multiply: 4.9
+
+binary_sensor:
+  - platform: gpio
+    id: door
+    pin:
+      number: GPIO7
+      mode: INPUT_PULLUP
+      allow_other_uses: true
+    # kontaktron zwarty = drzwi zamknięte (stan niski); otwarte = wysoki
+  - platform: gpio
+    id: leak
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true                           # woda zwiera sondę do GND
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 7                           # numer czujnika: encje sensor.sensmos_lora_7_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: temp
+      key: t
+      decimals: 1
+    - sensor: hum
+      key: h
+      decimals: 0
+    - sensor: pres
+      key: p
+      decimals: 0
+    - sensor: v12
+      key: v12
+      decimals: 2
+    - sensor: vbat
+      key: v
+      decimals: 2
+  binary_sensors:
+    - sensor: door
+      key: door
+      send_on_change: false        # stan idzie w ramce z on_boot; płytka i tak zaraz śpi
+    - sensor: leak
+      key: leak
+      send_on_change: false
