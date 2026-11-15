@@ -283,6 +283,23 @@ automation:
 
 Storage yards are often out of range of any node. Check first with a node in Point mode near the yard, or ask a neighbour there to run one.
 
+### Recipe: mailbox and garden gate
+
+[`examples/lora-skrzynka.yaml`](examples/lora-skrzynka.yaml): the board sleeps on battery and wakes only when the letter flap (or the gate) opens, when the collection door opens, or once every 12 hours as a heartbeat. It sends one frame and goes back to sleep. Use **normally closed** reed switches between 3.3 V and GPIO6/GPIO7 with a 100 kΩ resistor to GND: with the flap shut the reeds draw no current, so the battery only feeds the board's own sleep current. A normally open reed with a pull-up also works, but draws current all the time. If the flap stays open (a parcel), the board stops waking on that pin and checks again every 30 minutes, so it does not drain the battery. For a gate, wire one reed to GPIO6. You get `sensor.sensmos_lora_8_mail` (1 = mail waiting, 0 = collected), `…_ev` (what woke it: 1 flap or gate, 2 collection door, 0 heartbeat) and `…_v`. Hub 0.2.0-beta6 or newer counts the 12-hour heartbeat as the usual interval, so the silent alarm comes after 36 hours, not one hour after two quick frames.
+
+```yaml
+automation:
+  - alias: Mail arrived
+    trigger: { platform: state, entity_id: sensor.sensmos_lora_8_ev, attribute: ts }   # every frame, also the second letter
+    condition: { condition: state, entity_id: sensor.sensmos_lora_8_ev, state: "1" }
+    action: { service: notify.mobile_app_phone, data: { message: "You've got mail" } }
+  - alias: Mailbox battery low
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_8_v, below: 3.4 }
+    action: { service: notify.mobile_app_phone, data: { message: "Mailbox battery is low ({{ states('sensor.sensmos_lora_8_v') }} V)" } }
+```
+
+For the gate, change the message to "Someone opened the gate" and give the board its own `sub`.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

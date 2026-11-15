@@ -1,0 +1,164 @@
+# Skrzynka na listy i furtka: „przyszła poczta”, „wyjęta” i „ktoś otworzył furtkę” przez LoRa Sensmos, na baterii, bez Wi-Fi.
+# Płytka śpi (deep sleep) i budzi się tylko od kontaktronu albo raz na 12 h (znak życia). Jedna ramka i znów sen.
+#
+# KONTAKTRONY typu NC (normalnie zwarte: magnes przy kontaktronie = obwód otwarty). Przy zamkniętej klapie nie płynie
+# żaden prąd, a otwarcie zwiera pin do 3,3 V i budzi płytkę.
+#   klapa wrzutowa (albo furtka): kontaktron między 3,3 V a GPIO6, rezystor 100 kΩ z GPIO6 do GND
+#   drzwiczki do wyjmowania:      kontaktron między 3,3 V a GPIO7, rezystor 100 kΩ z GPIO7 do GND
+#   Na furtce wystarczy jeden kontaktron na GPIO6; GPIO7 zostaw z samym rezystorem do GND.
+# Zwykły kontaktron NO z pull-upem też zadziała, ale przy zamkniętej klapie stale bierze prąd i bateria szybko siądzie.
+# ZASILANIE: ogniwo 18650 albo LiPo w gnieździe akumulatora Heltec V3. Antenę wyprowadź poza metalową skrzynkę.
+#
+# W Home Assistant (sub 8):
+#   sensor.sensmos_lora_8_mail  1 = w skrzynce czeka poczta (klapa się otworzyła), 0 = wyjęta (otwarte drzwiczki)
+#   sensor.sensmos_lora_8_ev    co obudziło płytkę: 1 klapa/furtka, 2 drzwiczki, 0 znak życia co 12 h
+#   sensor.sensmos_lora_8_v     napięcie ogniwa
+# Hub dorzuca binary_sensor.sensmos_lora_8_silent: płytka milczy ponad 36 h (bateria, zabrana skrzynka).
+# Gotowe automatyzacje HA (powiadomienie „przyszła poczta”, „ktoś przy furtce”): README, sekcja „Recipes”.
+substitutions:
+  sub: "8"
+  heartbeat: 12h       # znak życia; Hub uzna ciszę po 3 takich odstępach
+  stuck_sleep: 30min   # gdy klapa albo drzwiczki zostały otwarte, budzimy się tylko zegarem i sprawdzamy znowu
+
+esphome:
+  name: skrzynka-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 1500ms                          # klapa zdąży opaść, ADC się ustali
+      - lambda: |-
+          if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+            const uint64_t w = esp_sleep_get_ext1_wakeup_status();
+            if (w & (1ULL << 7)) { id(ev_code) = 2; id(mail_waiting) = false; }   // drzwiczki: poczta wyjęta
+            else if (w & (1ULL << 6)) { id(ev_code) = 1; id(mail_waiting) = true; } // klapa albo furtka
+          } else {
+            id(ev_code) = 0;
+          }
+      - component.update: vbat
+      - component.update: mail
+      - component.update: ev
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora            # radio śpi razem z płytką
+      - lambda: |-
+          // Budzi tylko kontaktron, który jest teraz zamknięty. Otwarty (paczka w klapie, drzwiczki niedomknięte)
+          // budziłby płytkę w kółko i zjadł baterię, więc wtedy śpimy krótko i tylko zegarem.
+          uint64_t m = 0;
+          if (!id(flap).state) m |= 1ULL << 6;
+          if (!id(door).state) m |= 1ULL << 7;
+          id(stuck) = (m != ((1ULL << 6) | (1ULL << 7)));
+          if (m) id(sleepy).set_ext1_wakeup({m, ESP_EXT1_WAKEUP_ANY_HIGH});
+      - if:
+          condition:
+            lambda: "return id(stuck);"
+          then:
+            - deep_sleep.enter:
+                id: sleepy
+                sleep_duration: ${stuck_sleep}
+          else:
+            - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+globals:
+  - id: mail_waiting               # przeżywa sen i wymianę baterii (zapis tylko przy zmianie)
+    type: bool
+    restore_value: true
+    initial_value: "false"
+  - id: ev_code
+    type: int
+    initial_value: "0"
+  - id: stuck
+    type: bool
+    initial_value: "false"
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${heartbeat}
+  esp32_ext1_wakeup:
+    pins:
+      - number: GPIO6
+        allow_other_uses: true     # ten sam pin czyta binary_sensor niżej
+      - number: GPIO7
+        allow_other_uses: true
+    mode: ANY_HIGH
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+binary_sensor:
+  - platform: gpio                 # klapa wrzutowa albo furtka (on = otwarta)
+    id: flap
+    pin:
+      number: GPIO6
+      allow_other_uses: true
+  - platform: gpio                 # drzwiczki do wyjmowania poczty (on = otwarte)
+    id: door
+    pin:
+      number: GPIO7
+      allow_other_uses: true
+
+sensor:
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    filters:
+      - multiply: 4.9
+  - platform: template
+    id: mail
+    update_interval: never
+    lambda: "return id(mail_waiting) ? 1.0f : 0.0f;"
+  - platform: template
+    id: ev
+    update_interval: never
+    lambda: "return (float) id(ev_code);"
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}                      # numer czujnika: encje sensor.sensmos_lora_8_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: mail
+      key: mail
+      decimals: 0
+    - sensor: ev
+      key: ev
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
