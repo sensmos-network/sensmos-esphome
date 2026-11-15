@@ -9,6 +9,10 @@
 #ifdef USE_BINARY_SENSOR
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #endif
+#ifdef USE_SWITCH
+#include "esphome/components/switch/switch.h"
+#endif
+#include "esphome/core/preferences.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -21,7 +25,10 @@ namespace sensmos_lora {
 // szyfruje ją jak firmware noda i nadaje radiem SX126x na kanale domowym Sensmos (868.1 MHz, SF11).
 // Ramkę słyszy dowolny nod Sensmos w zasięgu; serwer dowozi ją do Huba albo noda-adresata (hub: id8),
 // a ten robi z niej encje sensor.sensmos_lora_<sub>_<klucz> w Home Assistant.
-class SensmosLora : public PollingComponent {
+// Przełączniki przez radio (switches:): nod-baza nadaje „c=<licznik>;<klucz>=1|0|toggle” (sensmos.lora_send
+// w HA, do własnego czujnika sub), komponent sprawdza AES, CRC i rosnący licznik (ochrona przed nagraną ramką),
+// przestawia przełącznik i od razu odsyła stan „c=<licznik>;<klucz>=…” jako potwierdzenie.
+class SensmosLora : public PollingComponent, public sx126x::SX126xListener {
  public:
   void set_radio(sx126x::SX126x *r) { this->radio_ = r; }
   void set_dst(const std::string &id8);
@@ -43,6 +50,15 @@ class SensmosLora : public PollingComponent {
 #ifdef USE_BINARY_SENSOR
   void add_binary_sensor(binary_sensor::BinarySensor *s, const std::string &key, bool on_change);
 #endif
+
+#ifdef USE_SWITCH
+  // Zmiana przełącznika z płytki (przycisk, automatyzacja) też idzie od razu, jak czujnik binarny.
+  void add_switch(switch_::Switch *s, const std::string &key) {
+    this->switches_.push_back({s, key});
+    s->add_on_state_callback([this](bool) { this->pending_change_ = true; });
+  }
+#endif
+  void on_packet(const std::vector<uint8_t> &packet, float rssi, float snr) override;
 
   void setup() override;
   void update() override;
@@ -71,7 +87,20 @@ class SensmosLora : public PollingComponent {
   };
   std::vector<BinaryItem> binaries_;
 #endif
+#ifdef USE_SWITCH
+  struct SwitchItem {
+    switch_::Switch *s;
+    std::string key;
+  };
+  std::vector<SwitchItem> switches_;
+#endif
   bool budget_ok_(uint32_t airtime_ms);
+  bool has_switches_() const;
+  ESPPreferenceObject ctr_pref_;
+  uint32_t last_ctr_{0};
+  uint32_t ack_ctr_{0};                // licznik polecenia do odesłania w potwierdzeniu
+  bool pending_ack_{false};
+  uint32_t rx_ok_{0}, rx_bad_{0}, rx_replay_{0};
 
   sx126x::SX126x *radio_{nullptr};
   uint8_t dst_[4]{0, 0, 0, 0};

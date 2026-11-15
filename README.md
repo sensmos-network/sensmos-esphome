@@ -166,6 +166,37 @@ Full working example for the Heltec V3: [`examples/lora-heltec-v3.yaml`](example
 - **Reception:** the frame needs a Sensmos node in range listening on the home channel. Nodes in Point mode and LoRaWAN gateways do that all the time; other nodes rotate channels and hear it part of the time.
 - **Tests:** `node --test tests/frame.test.js` builds the frame in C++ and decodes it with the Hub's own code (needs `g++`, OpenSSL and `sensmos-hub` checked out next to this repo).
 
+### Switches over radio
+
+The other direction: Home Assistant switches a relay on a board with no Wi-Fi (gate, pump, cabin heating). Add `switches:` and the board keeps listening on the home channel. Your Sensmos **node with a LoRa radio** (the one in `hub:`) sends the command; a Hub has no radio and cannot. Each command carries a counter `c=` that must grow, so a recorded frame cannot be replayed, and the board answers right away with its new state. Full example: [`examples/lora-przelacznik.yaml`](examples/lora-przelacznik.yaml).
+
+```yaml
+sensmos_lora:
+  hub: "a1b2c3d4"     # your node with a radio
+  sub: 5
+  key: !secret sensmos_lora_key
+  switches:
+    - switch: relay
+      key: relay      # command relay=1 / relay=0 / relay=toggle
+```
+
+In Home Assistant (Sensmos integration with that node), a template switch:
+
+```yaml
+template:
+  - switch:
+      - name: Gate
+        state: "{{ 'relay=1' in (states('sensor.home_node_lora_data_frame_sub_5') or '').split(';') }}"
+        turn_on:
+          - action: sensmos.lora_send
+            data: { dst: a1b2c3d4, sub: 5, aes: true, payload: "c={{ now().timestamp() | int }};relay=1" }
+        turn_off:
+          - action: sensmos.lora_send
+            data: { dst: a1b2c3d4, sub: 5, aes: true, payload: "c={{ now().timestamp() | int }};relay=0" }
+```
+
+`dst` is the node's own id8: the node then sends the frame by radio to its own sensor `sub`. Each command is about 1 s on air and counts toward the node's 1% budget, so this is for a few switches a day, not dimming lights.
+
 ### Recipe: garage / allotment guard
 
 [`examples/lora-straznik-garazu.yaml`](examples/lora-straznik-garazu.yaml): a door reed switch, a water-leak probe, a DS18B20 for frost and the battery voltage, all on one Heltec V3, no Wi-Fi on site. In Home Assistant you get `sensor.sensmos_lora_2_door`, `…_leak`, `…_t`, `…_v`, and the Hub adds `binary_sensor.sensmos_lora_2_silent`, which turns `on` when the sensor goes quiet (no frame for 3 normal intervals, at least 1 hour). That is the alarm for a dead battery, a stolen board or a cut cable. The Hub also fires `sensmos_lora_silent` and, on the first frame afterwards, `sensmos_lora_back`.

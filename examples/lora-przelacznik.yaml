@@ -1,0 +1,59 @@
+# Przełącznik przez radio Sensmos: brama, pompa, ogrzewanie w domku — tam, gdzie nie ma Wi-Fi.
+# Home Assistant wysyła polecenie radiem Twojego noda Sensmos (ESP32 z LoRa, w zasięgu płytki),
+# płytka sprawdza szyfr i licznik, przestawia przekaźnik i od razu odsyła stan jako potwierdzenie.
+# Hub bez radia nie nada polecenia: potrzebny jest nod z radiem, którego id8 wpisujesz w hub.
+# W HA (README, sekcja „Switches over radio”): przełącznik szablonowy z akcją sensmos.lora_send
+# i payload "c={{ now().timestamp() | int }};relay=1"; stan z sensor.<nod>_lora_data_frame_sub_5.
+esphome:
+  name: brama-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Płytka słucha go stale (rx_start domyślnie true).
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+switch:
+  - platform: gpio                 # przekaźnik na GPIO5 (moduł z wejściem 3,3 V)
+    id: relay
+    pin: GPIO5
+    restore_mode: RESTORE_DEFAULT_OFF
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 noda Sensmos z radiem (to on nadaje polecenia)
+  sub: 5                           # numer płytki: polecenia na sub 5, stan w sensor.<nod>_lora_data_frame_sub_5
+  key: "zmien-mnie-na-swoja-fraze"  # fraza-klucz tego noda; w praktyce !secret sensmos_lora_key
+  update_interval: 15min           # stan także co 15 min, gdyby potwierdzenie się zgubiło
+  switches:
+    - switch: relay
+      key: relay                   # polecenie relay=1 / relay=0 / relay=toggle

@@ -70,6 +70,54 @@ inline size_t frame_build(uint8_t *out, const uint8_t dst[4], uint8_t sub, const
   return p + plen + 4;
 }
 
+static constexpr uint8_t FLAG_LAST = 0x02;
+
+// Ramka od noda-bazy do tego czujnika (dst = baza, sub = mój, AES + LAST, czyli nadał ją nod radiem).
+// Odszyfrowuje do out (min. PAYLOAD_MAX + 1 B, zakończone zerem). Zwraca długość treści albo -1.
+inline int frame_open(const uint8_t *f, size_t n, const uint8_t dst[4], uint8_t sub, const uint8_t key[32], CtrFn ctr,
+                      uint8_t *out) {
+  if (!key || !ctr || n < FRAME_HDR + FRAME_NONCE + 5 || f[0] != FRAME_MAGIC || f[1] != FRAME_TYPE_DATA) return -1;
+  if (!(f[2] & FLAG_AES) || !(f[2] & FLAG_LAST) || memcmp(f + 3, dst, 4) != 0 || f[7] != sub) return -1;
+  const size_t bn = n - FRAME_HDR - FRAME_NONCE, pn = bn - 4;
+  if (pn > PAYLOAD_MAX) return -1;
+  uint8_t body[PAYLOAD_MAX + 4], iv[16] = {0};
+  memcpy(body, f + FRAME_HDR + FRAME_NONCE, bn);
+  memcpy(iv, f + FRAME_HDR, 4);
+  memcpy(iv + 4, dst, 4);
+  iv[8] = sub;
+  ctr(key, iv, body, bn);
+  const uint32_t crc = uint32_t(body[pn]) | (uint32_t(body[pn + 1]) << 8) | (uint32_t(body[pn + 2]) << 16) |
+                       (uint32_t(body[pn + 3]) << 24);
+  if (frame_crc32(body, pn) != crc) return -1;
+  memcpy(out, body, pn);
+  out[pn] = 0;
+  return int(pn);
+}
+
+// Wartość klucza z treści „c=1731600000;relay=1”: wskaźnik i długość albo nullptr.
+inline const char *payload_get(const char *p, const char *key, size_t *len) {
+  const size_t kl = strlen(key);
+  while (*p) {
+    const char *end = strchr(p, ';');
+    const size_t pl = end ? size_t(end - p) : strlen(p);
+    if (pl > kl && strncmp(p, key, kl) == 0 && p[kl] == '=') {
+      *len = pl - kl - 1;
+      return p + kl + 1;
+    }
+    if (!end) break;
+    p = end + 1;
+  }
+  return nullptr;
+}
+
+// Stan z polecenia: 1 = włącz, 0 = wyłącz, 2 = przełącz, -1 = nieznane.
+inline int switch_value(const char *v, size_t n) {
+  if ((n == 1 && v[0] == '1') || (n == 2 && strncmp(v, "on", 2) == 0)) return 1;
+  if ((n == 1 && v[0] == '0') || (n == 3 && strncmp(v, "off", 3) == 0)) return 0;
+  if (n == 6 && strncmp(v, "toggle", 6) == 0) return 2;
+  return -1;
+}
+
 // Czas nadawania ramki LoRa w ms (wzór Semtech AN1200.13), nagłówek jawny, CRC włączone.
 inline uint32_t lora_airtime_ms(size_t len, uint8_t sf, uint32_t bw_hz, uint8_t cr /*5..8*/, uint16_t preamble) {
   const double ts = double(1u << sf) / double(bw_hz) * 1000.0;  // ms na symbol

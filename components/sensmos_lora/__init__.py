@@ -9,7 +9,7 @@ import inspect
 
 from esphome import automation
 import esphome.codegen as cg
-from esphome.components import binary_sensor, sensor, sx126x
+from esphome.components import binary_sensor, sensor, switch, sx126x
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_KEY, CONF_SENSORS, CONF_UPDATE_INTERVAL
 import esphome.final_validate as fv
@@ -28,6 +28,8 @@ CONF_ON_CHANGE = "send_on_change"
 CONF_AIRTIME = "max_airtime_per_hour"
 CONF_CHECK_RADIO = "check_radio"
 CONF_EXTRA = "extra"
+CONF_SWITCHES = "switches"
+CONF_SWITCH = "switch"
 
 sensmos_lora_ns = cg.esphome_ns.namespace("sensmos_lora")
 SensmosLora = sensmos_lora_ns.class_("SensmosLora", cg.PollingComponent)
@@ -82,13 +84,23 @@ BINARY_SCHEMA = cv.Schema(
 )
 
 
+SWITCH_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_SWITCH): cv.use_id(switch.Switch),
+        cv.Required(CONF_KEY): _key_name,
+    }
+)
+
+
 def _need_key(config):
     if CONF_KEY not in config and not config[CONF_OPEN]:
         raise cv.Invalid(
             "podaj key (tę samą frazę co opcja lora_key w Hubie) albo ustaw open: true dla ramek jawnych"
         )
-    if not config.get(CONF_SENSORS) and not config.get(CONF_BINARY_SENSORS):
-        raise cv.Invalid("dodaj co najmniej jeden czujnik w sensors albo binary_sensors")
+    if config.get(CONF_SWITCHES) and CONF_KEY not in config:
+        raise cv.Invalid("switches: przełączniki przez radio wymagają key (polecenia muszą być szyfrowane)")
+    if not config.get(CONF_SENSORS) and not config.get(CONF_BINARY_SENSORS) and not config.get(CONF_SWITCHES):
+        raise cv.Invalid("dodaj co najmniej jeden czujnik w sensors, binary_sensors albo switches")
     # SF11 to ~1 s w eterze na ramkę; częściej niż co 2 min szybko kończy się limit 1%.
     if config[CONF_UPDATE_INTERVAL].total_milliseconds < 120000:
         raise cv.Invalid("update_interval: co najmniej 2min (limit czasu nadawania w paśmie 868 MHz)")
@@ -111,6 +123,10 @@ CONFIG_SCHEMA = cv.All(
                 cv.ensure_list(BINARY_SCHEMA), cv.Length(max=16)
             ),
             # Limit EU868 w 868.0-868.6 MHz to 1% = 36 s na godzinę. Zostawiamy zapas.
+            # Przełączniki sterowane z HA przez radio noda-bazy (sensmos.lora_send). Płytka słucha stale.
+            cv.Optional(CONF_SWITCHES, default=[]): cv.All(
+                cv.ensure_list(SWITCH_SCHEMA), cv.Length(max=8)
+            ),
             cv.Optional(CONF_AIRTIME, default="30s"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(max=cv.TimePeriod(seconds=36)),
@@ -150,6 +166,8 @@ def _final_validate(config):
         problems.append("crc_enable: true")
     if int(radio.get("payload_length", 0)) != 0:
         problems.append("payload_length: 0 (albo usuń)")
+    if config.get(CONF_SWITCHES) and not radio.get("rx_start", True):
+        problems.append("rx_start: true (przełączniki muszą słyszeć polecenia)")
     if int(radio.get("pa_power", 17)) > EU_MAX_DBM:
         problems.append(f"pa_power: {EU_MAX_DBM} (limit EU dla 868.1 MHz)")
     if problems:
@@ -184,6 +202,9 @@ async def to_code(config):
     for item in config[CONF_BINARY_SENSORS]:
         s = await cg.get_variable(item[CONF_SENSOR])
         cg.add(var.add_binary_sensor(s, item[CONF_KEY], item[CONF_ON_CHANGE]))
+    for item in config[CONF_SWITCHES]:
+        s = await cg.get_variable(item[CONF_SWITCH])
+        cg.add(var.add_switch(s, item[CONF_KEY]))
 
 
 SEND_SCHEMA = automation.maybe_simple_id(

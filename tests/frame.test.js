@@ -47,3 +47,17 @@ test('czas nadawania SF11/125 kHz: typowa ramka ok. 1 s, limit 30 s/h starcza na
     assert.ok(ms > 700 && ms < 1400, String(ms));
     assert.ok(Math.floor(30000 / ms) >= 20);
 });
+
+test('przełącznik: polecenie od noda-bazy (AES + LAST) otwiera się, klucz relay czytany', () => {
+    const key = lora.keyFromPhrase('fraza-brama-1');
+    const cmd = (t) => { const b = Buffer.from(lora.encode('a1b2c3d4', 5, Buffer.from(t), key, Buffer.from('11223344', 'hex')), 'hex'); b[2] |= 2; return b.toString('hex'); };
+    const open = (h, sub = '5', ph = 'fraza-brama-1') => execFileSync(bin, ['open', 'a1b2c3d4', sub, ph, h]).toString().trim();
+    assert.strictEqual(open(cmd('c=1731600000;relay=1')), 'c=1731600000;relay=1|1|1');
+    assert.strictEqual(open(cmd('c=1731600001;relay=off')), 'c=1731600001;relay=off|off|0');
+    assert.strictEqual(open(cmd('c=1731600002;relay=toggle;x=1')), 'c=1731600002;relay=toggle;x=1|toggle|2');
+    assert.strictEqual(open(cmd('c=5;relayx=1')), 'c=5;relayx=1|-|-9', 'klucz relayx to nie relay');
+    const noLast = lora.encode('a1b2c3d4', 5, Buffer.from('c=9;relay=1'), key, Buffer.from('11223344', 'hex'));
+    assert.throws(() => open(noLast), 'bez LAST = nie od bazy (np. ramka innego czujnika)');
+    assert.throws(() => open(cmd('c=9;relay=1'), '6'), 'inny sub');
+    assert.throws(() => open(cmd('c=9;relay=1'), '5', 'inna-fraza-9'), 'zły klucz');
+});
