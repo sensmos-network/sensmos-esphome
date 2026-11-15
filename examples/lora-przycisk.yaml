@@ -10,10 +10,10 @@
 # BRZĘCZYK (opcjonalnie): aktywny brzęczyk 3,3 V między GPIO6 a GND. DIODA: biała dioda na płytce (GPIO35).
 # Odbiór i potwierdzenie: Twój nod Sensmos z radiem (id8 w hub:), w trybie Punkt, z integracją Sensmos w HA.
 #
-# W HA (sub 4): ramka „alarm=1;ack=0” w sensor.<nod>_lora_data_frame_sub_4 i zdarzenie sensmos_lora_frame;
-# przez Huba także sensor.sensmos_lora_4_alarm. Blueprint robi resztę.
+# W HA (sub 14): ramka „alarm=1;ack=0” w sensor.<nod>_lora_data_frame_sub_14 i zdarzenie sensmos_lora_frame;
+# przez Huba także sensor.sensmos_lora_14_alarm. Blueprint robi resztę.
 substitutions:
-  sub: "4"
+  sub: "14"
 
 esphome:
   name: przycisk-alarmu

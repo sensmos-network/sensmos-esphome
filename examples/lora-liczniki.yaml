@@ -4,7 +4,7 @@
 # Woda: wodomierz z nakładką impulsową (kontaktron, dwa przewody) na GPIO6 i GND; ile litrów na impuls,
 #   jest na nakładce (zwykle 10 L).
 # Płytka: Heltec WiFi LoRa 32 V3, zasilanie z ładowarki USB (liczenie impulsów nie śpi, bateria nie wystarczy).
-# W Home Assistant (sub 5): sensor.sensmos_lora_5_kwh i …_m3 trafiają prosto do panelu Energia (Hub 0.2.0-beta6+),
+# W Home Assistant (sub 3): sensor.sensmos_lora_3_kwh i …_m3 trafiają prosto do panelu Energia (Hub 0.2.0-beta6+),
 #   …_w to moc chwilowa w watach, …_lh przepływ wody w L/h.
 #
 # KALIBRACJA (substitutions): imp_kwh i l_imp z tabliczki, e_start i w_start = stan liczydeł w dniu montażu,
@@ -120,7 +120,7 @@ sensor:
 
 sensmos_lora:
   hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
-  sub: 5                           # numer czujnika: encje sensor.sensmos_lora_5_*
+  sub: 3                           # numer czujnika: encje sensor.sensmos_lora_3_*
   key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
   update_interval: 5min
   sensors:

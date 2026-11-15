@@ -233,12 +233,12 @@ automation:
 
 ### Recipe: meters in the basement
 
-[`examples/lora-liczniki.yaml`](examples/lora-liczniki.yaml): a light sensor module over the blinking LED of the electricity meter and the pulse output (reed switch) of the water meter, both counted by the board, which sends every 5 minutes. Enter the pulses per kWh and litres per pulse from the plates, and the readings on the day you install it (`e_start`, `w_start`), so Home Assistant shows the same numbers as the meters. Counted pulses survive a reboot. With Sensmos Hub 0.2.0-beta6 or newer, `sensor.sensmos_lora_5_kwh` and `…_m3` are counters that go straight into the **Energy** dashboard; `…_w` is the power right now and `…_lh` the water flow. The board counts all the time, so power it from a USB charger, not a battery.
+[`examples/lora-liczniki.yaml`](examples/lora-liczniki.yaml): a light sensor module over the blinking LED of the electricity meter and the pulse output (reed switch) of the water meter, both counted by the board, which sends every 5 minutes. Enter the pulses per kWh and litres per pulse from the plates, and the readings on the day you install it (`e_start`, `w_start`), so Home Assistant shows the same numbers as the meters. Counted pulses survive a reboot. With Sensmos Hub 0.2.0-beta6 or newer, `sensor.sensmos_lora_3_kwh` and `…_m3` are counters that go straight into the **Energy** dashboard; `…_w` is the power right now and `…_lh` the water flow. The board counts all the time, so power it from a USB charger, not a battery.
 
 ```yaml
 automation:
   - alias: Water running at night
-    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_5_lh, above: 0, for: "02:00:00" }
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_3_lh, above: 0, for: "02:00:00" }
     condition: { condition: time, after: "01:00:00", before: "05:00:00" }
     action: { service: notify.mobile_app_phone, data: { message: "Water has been running for 2 hours at night, check for a leak" } }
 ```
