@@ -245,6 +245,23 @@ automation:
 
 Meters that only talk wM-Bus radio (many new water and heat meters) need a second radio and are not in this recipe yet.
 
+### Recipe: car parked outside
+
+[`examples/lora-auto.yaml`](examples/lora-auto.yaml): a board in the car, powered from **pin 16 of the OBD2 port** (permanent 12 V; pins 4 and 5 are ground) through a step-down converter that draws under 1 mA with no load (not an LM2596 module, those draw several mA on their own) and a 1 A fuse. Only power is taken from the port; the car's data bus is not touched. A 100 kΩ / 22 kΩ divider on GPIO4 measures the battery, and an SW-420 shock sensor on GPIO7 wakes the board. It sleeps, wakes every 30 minutes or on a shock, sends one frame and sleeps again; below `low_v` (11.8 V) it sleeps for 6 hours to protect the battery. You get `sensor.sensmos_lora_6_v12`, `…_mv` (1 = woken by a shock) and `…_v`, and the hub's `binary_sensor.sensmos_lora_6_silent` turns on when the car leaves the range or the board is unplugged.
+
+```yaml
+automation:
+  - alias: Someone is moving the car
+    trigger: { platform: state, entity_id: sensor.sensmos_lora_6_mv, to: "1" }
+    condition: { condition: state, entity_id: input_boolean.i_am_driving, state: "off" }
+    action: { service: notify.mobile_app_phone, data: { message: "Shock at the car, battery {{ states('sensor.sensmos_lora_6_v12') }} V" } }
+  - alias: Car battery low
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_6_v12, below: 11.9 }
+    action: { service: notify.mobile_app_phone, data: { message: "Car battery is at {{ states('sensor.sensmos_lora_6_v12') }} V" } }
+```
+
+The car body blocks radio, so put the antenna under the windscreen. This is a notification, not a car alarm or a tracker: a frame can be lost, and when the car drives away, it is out of range.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

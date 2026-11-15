@@ -1,0 +1,119 @@
+# Auto pod blokiem: napięcie akumulatora i alarm „ktoś rusza auto” przez LoRa Sensmos, bez Wi-Fi i bez karty SIM.
+# Płytka śpi (deep sleep), budzi się co 30 min albo od wstrząsu, wysyła jedną ramkę i znów zasypia.
+#
+# ZASILANIE z gniazda OBD2 (pod kierownicą): pin 16 = +12 V stale (także przy wyłączonym zapłonie), pin 4 i 5 = masa.
+#   12 V → przetwornica step-down na 5 V o małym poborze bez obciążenia (poniżej 1 mA, np. Pololu D36V6F5;
+#   NIE moduły LM2596, one same biorą kilka mA) → pin 5V płytki. Bezpiecznik 1 A w przewodzie +12 V.
+#   Do gniazda wpinasz tylko wtyk OBD2 z wyprowadzonymi pinami 16, 4 i 5; z danymi auta (CAN) nic się nie dzieje.
+# NAPIĘCIE akumulatora: dzielnik 100 kΩ (od +12 V) / 22 kΩ (do masy), środek na GPIO4. 14,4 V daje ok. 2,6 V.
+# WSTRZĄS: czujnik drgań SW-420 (moduł z LM393), wyjście DO na GPIO7, zasilanie 3,3 V. Czułość ustawiasz potencjometrem.
+# Płytka: Heltec WiFi LoRa 32 V3. Antenę wyprowadź pod szybę, bo karoseria tłumi radio.
+#
+# W Home Assistant (sub 6): sensor.sensmos_lora_6_v12 (V akumulatora), …_mv (1 = obudził go wstrząs), …_v (zasilanie płytki).
+# Hub dorzuca binary_sensor.sensmos_lora_6_silent: auto odjechało poza zasięg albo ktoś odpiął płytkę.
+# OCHRONA AKUMULATORA: poniżej low_v płytka śpi 6 h zamiast 30 min (wstrząs nadal ją budzi na jedną ramkę).
+substitutions:
+  low_v: "11.8"        # V: poniżej tego oszczędzamy akumulator
+  every: 30min         # zwykły odstęp ramek
+
+esphome:
+  name: auto-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s                              # pomiar ADC z filtrem
+      - component.update: v12
+      - component.update: vbat
+      - component.update: moved
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora            # radio śpi razem z płytką (inaczej bierze ok. 1 mA)
+      - if:
+          condition:
+            lambda: "return !std::isnan(id(v12).state) && id(v12).state < ${low_v};"
+          then:
+            - deep_sleep.enter:                # ochrona akumulatora: długi sen
+                id: sleepy
+                sleep_duration: 6h
+          else:
+            - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${every}
+  wakeup_pin: GPIO7
+  wakeup_pin_mode: INVERT_WAKEUP               # gdy czujnik jeszcze drga przy zasypianiu, czekamy na zmianę stanu
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: adc
+    id: v12
+    pin: GPIO4
+    attenuation: 12db
+    samples: 16
+    update_interval: never                     # mierzymy raz, w on_boot
+    filters:
+      - multiply: 5.545                        # (100k + 22k) / 22k; dopasuj do multimetru
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    update_interval: never
+    filters:
+      - multiply: 4.9
+  - platform: template
+    id: moved
+    update_interval: never
+    lambda: |-
+      return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? 1.0f : 0.0f;
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 6                           # numer czujnika: encje sensor.sensmos_lora_6_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: v12
+      key: v12
+      decimals: 2
+    - sensor: moved
+      key: mv
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
