@@ -1,0 +1,101 @@
+# Zwykłe ESPHome przez sieć Sensmos: bez komponentu Sensmos, same wbudowane klocki ESPHome (sx126x + packet_transport).
+# Płytka nadaje odczyty na kanale domowym Sensmos, każdy nod Sensmos w zasięgu je słyszy, a sieć dowozi je do Twojego
+# Huba (0.2.0-beta7, opcja esphome_lora). Hub odszyfrowuje je tym samym hasłem co tutaj i pokazuje w Home Assistant
+# jako sensor.sensmos_lora_<sub>_<id>. Druga płytka ESPHome w zasięgu może odbierać te same odczyty bezpośrednio
+# (platform: packet_transport, provider: dzialka-czujnik), jak w dokumentacji ESPHome.
+#
+# W Hubie (dodatek → Konfiguracja → esphome_lora):  dzialka-czujnik=20:zmien-mnie-na-swoje-haslo
+#   20 to numer sub: encje sensor.sensmos_lora_20_t, _h, _drzwi, _v. Wybierz numer, którego nie używa inny czujnik.
+# Nazwa płytki (esphome: name) leci w eterze jawnie, tak działa packet_transport: nie wpisuj w nią nazwiska ani adresu.
+# Treść jest szyfrowana (XXTEA), a rolling code odrzuca ramki nagrane i nadane ponownie.
+#
+# Pasmo 868 MHz ma limit czasu nadawania (1%). Ramka na SF11 trwa ok. 1,5 s, więc odczyty co 10 min, a od razu
+# tylko zmiana drzwi. Nie zmniejszaj odstępu poniżej 5 min. ping_pong_enable zostaw wyłączone: wymaga łącza w obie strony.
+esphome:
+  name: dzialka-czujnik
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+packet_transport:
+  platform: sx126x
+  update_interval: never           # nadaje, gdy czujnik ma nowy odczyt (interval niżej) albo drzwi zmienią stan
+  encryption: "zmien-mnie-na-swoje-haslo"   # w praktyce: !secret; to samo hasło w Hubie
+  rolling_code_enable: true
+  sensors:
+    - t
+    - h
+    - v
+  binary_sensors:
+    - drzwi
+
+i2c:
+  sda: GPIO41
+  scl: GPIO42
+
+sensor:
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: never
+    temperature:
+      id: t
+      accuracy_decimals: 1
+    humidity:
+      id: h
+      accuracy_decimals: 0
+      on_value:                    # BME mierzy chwilę; napięcie dopiero po nim, żeby wszystko poszło w jednej ramce
+        - component.update: v
+    id: bme
+  - platform: adc
+    id: v
+    pin: GPIO1
+    attenuation: 12db
+    update_interval: never
+    accuracy_decimals: 2
+    filters:
+      - multiply: 4.9
+
+binary_sensor:
+  - platform: gpio
+    id: drzwi
+    pin:
+      number: GPIO5
+      inverted: true
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on_off: 500ms
+
+# Odczyt co 10 minut: BME280, po nim napięcie, a wszystko razem w jednej ramce.
+interval:
+  - interval: 10min
+    then:
+      - component.update: bme
