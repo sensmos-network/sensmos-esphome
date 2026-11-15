@@ -1,0 +1,98 @@
+# Strażnik garażu / działki / piwnicy: drzwi, zalanie, mróz, przez LoRa Sensmos, bez Wi-Fi na miejscu.
+# Płytka: Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262), zasilanie z USB albo akumulatora z ładowarką.
+# Co dostajesz w Home Assistant (sub 2):
+#   sensor.sensmos_lora_2_door   1 = drzwi otwarte, kontaktron GPIO5 i GND (nadaje od razu po zmianie, najczęściej co 30 s)
+#   sensor.sensmos_lora_2_leak   1 = woda na podłodze (sonda: dwa druty przy podłodze, GPIO7 i GND)
+#   sensor.sensmos_lora_2_t      temperatura z DS18B20 (mróz w garażu, piwnicy, szklarni)
+#   sensor.sensmos_lora_2_v      napięcie akumulatora
+#   binary_sensor.sensmos_lora_2_silent  on = czujnik zamilkł (Hub: brak ramek dłużej niż 3 zwykłe odstępy, min. 1 h)
+# Gotowe automatyzacje HA (powiadomienie o drzwiach, zalaniu, mrozie i ciszy): README, sekcja „Recipes”.
+# Odbiór: nod Sensmos w zasięgu w trybie Punkt (apka → nod → LoRa → Odbiór ramek) albo bramka LoRaWAN.
+esphome:
+  name: straznik-garazu
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO6                     # DS18B20: DATA na GPIO6, rezystor 4,7 kΩ do 3,3 V
+
+sensor:
+  - platform: dallas_temp
+    id: temp
+    update_interval: 60s
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    filters:
+      - multiply: 4.9
+    update_interval: 60s
+
+binary_sensor:
+  - platform: gpio                 # kontaktron drzwi/bramy: GPIO5 i GND (zwarty = zamknięte; nie GPIO0, bo przy starcie wejdzie w tryb wgrywania)
+    id: door
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on_off: 500ms
+  - platform: gpio                 # sonda zalania: woda zwiera GPIO7 z GND
+    id: leak
+    pin:
+      number: GPIO7
+      inverted: true
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on: 2s
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 2                           # numer czujnika: encje sensor.sensmos_lora_2_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 10min           # regularne ramki = Hub wie, kiedy czujnik zamilkł
+  sensors:
+    - sensor: temp
+      key: t
+    - sensor: vbat
+      key: v
+      decimals: 2
+  binary_sensors:
+    - sensor: door
+      key: door
+    - sensor: leak
+      key: leak

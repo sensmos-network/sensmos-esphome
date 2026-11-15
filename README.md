@@ -166,6 +166,29 @@ Full working example for the Heltec V3: [`examples/lora-heltec-v3.yaml`](example
 - **Reception:** the frame needs a Sensmos node in range listening on the home channel. Nodes in Point mode and LoRaWAN gateways do that all the time; other nodes rotate channels and hear it part of the time.
 - **Tests:** `node --test tests/frame.test.js` builds the frame in C++ and decodes it with the Hub's own code (needs `g++`, OpenSSL and `sensmos-hub` checked out next to this repo).
 
+### Recipe: garage / allotment guard
+
+[`examples/lora-straznik-garazu.yaml`](examples/lora-straznik-garazu.yaml): a door reed switch, a water-leak probe, a DS18B20 for frost and the battery voltage, all on one Heltec V3, no Wi-Fi on site. In Home Assistant you get `sensor.sensmos_lora_2_door`, `…_leak`, `…_t`, `…_v`, and the Hub adds `binary_sensor.sensmos_lora_2_silent`, which turns `on` when the sensor goes quiet (no frame for 3 normal intervals, at least 1 hour). That is the alarm for a dead battery, a stolen board or a cut cable. The Hub also fires `sensmos_lora_silent` and, on the first frame afterwards, `sensmos_lora_back`.
+
+```yaml
+# Home Assistant automations (replace notify.mobile_app_phone with your own notifier)
+automation:
+  - alias: Garage door opened
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_2_door, above: 0.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "Garage door is open" } }
+  - alias: Water on the garage floor
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_2_leak, above: 0.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "Water on the garage floor" } }
+  - alias: Frost in the garage
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_2_t, below: 1 }
+    action: { service: notify.mobile_app_phone, data: { message: "Garage below 1 °C" } }
+  - alias: Garage sensor went silent
+    trigger: { platform: event, event_type: sensmos_lora_silent, event_data: { sub: 2 } }
+    action: { service: notify.mobile_app_phone, data: { message: "Garage sensor has been silent for {{ (trigger.event.data.silent_s / 60) | int }} min" } }
+```
+
+The silence alarm only means something if a node keeps listening: put one Sensmos node in range in **Point mode** (app → node → LoRa → frame reception). A node in the default scanner mode hears the home channel only part of each hour.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.
