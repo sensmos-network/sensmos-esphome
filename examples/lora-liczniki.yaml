@@ -1,0 +1,138 @@
+# Liczniki z piwnicy: prąd (diody LED licznika) i woda (wyjście impulsowe wodomierza) przez LoRa Sensmos, bez Wi-Fi.
+# Prąd: czujnik światła (moduł z fototranzystorem i LM393, np. TCRT5000 albo LM393 „light sensor”) przyklejony
+#   nad mrugającą diodą licznika (napis „imp/kWh”), wyjście cyfrowe DO na GPIO5.
+# Woda: wodomierz z nakładką impulsową (kontaktron, dwa przewody) na GPIO6 i GND; ile litrów na impuls,
+#   jest na nakładce (zwykle 10 L).
+# Płytka: Heltec WiFi LoRa 32 V3, zasilanie z ładowarki USB (liczenie impulsów nie śpi, bateria nie wystarczy).
+# W Home Assistant (sub 5): sensor.sensmos_lora_5_kwh i …_m3 trafiają prosto do panelu Energia (Hub 0.2.0-beta6+),
+#   …_w to moc chwilowa w watach, …_lh przepływ wody w L/h.
+#
+# KALIBRACJA (substitutions): imp_kwh i l_imp z tabliczki, e_start i w_start = stan liczydeł w dniu montażu,
+# żeby w HA był ten sam stan co na liczniku. Zliczone impulsy przeżywają restart płytki (pamięć flash).
+substitutions:
+  imp_kwh: "1000"     # impulsów na kWh (tabliczka licznika prądu)
+  l_imp: "10"         # litrów na impuls (nakładka wodomierza)
+  e_start: "0"        # kWh na liczniku w dniu montażu
+  w_start: "0"        # m³ na wodomierzu w dniu montażu
+
+esphome:
+  name: liczniki-lora
+  on_boot:
+    priority: -100
+    then:
+      - pulse_meter.set_total_pulses:
+          id: e_meter
+          value: !lambda "return id(e_pulses);"
+      - pulse_meter.set_total_pulses:
+          id: w_meter
+          value: !lambda "return id(w_pulses);"
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+preferences:
+  flash_write_interval: 10min   # zapis liczników co 10 min, żeby nie zużywać flasha
+
+globals:
+  - id: e_pulses
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: w_pulses
+    type: int
+    restore_value: yes
+    initial_value: "0"
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą czujnika.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: pulse_meter         # dioda licznika prądu: impulsy/min → W
+    id: e_meter
+    pin:
+      number: GPIO5
+      inverted: true              # moduł LM393 daje stan niski, gdy widzi światło
+      mode: INPUT_PULLUP
+    internal_filter: 20ms
+    timeout: 5min                 # bez impulsu przez 5 min = 0 W
+    unit_of_measurement: W
+    filters:
+      - multiply: !lambda "return 60000.0f / ${imp_kwh};"
+    total:
+      id: e_kwh
+      unit_of_measurement: kWh
+      accuracy_decimals: 3
+      on_raw_value:
+        then:
+          - lambda: "id(e_pulses) = (int) x;"
+      filters:
+        - lambda: "return ${e_start} + x / ${imp_kwh};"
+  - platform: pulse_meter         # nakładka wodomierza: impulsy/min → L/h
+    id: w_meter
+    pin:
+      number: GPIO6
+      inverted: true              # kontaktron zwiera do GND
+      mode: INPUT_PULLUP
+    internal_filter: 100ms        # drgania styku
+    timeout: 10min
+    unit_of_measurement: L/h
+    filters:
+      - multiply: !lambda "return 60.0f * ${l_imp};"
+    total:
+      id: w_m3
+      unit_of_measurement: m³
+      accuracy_decimals: 3
+      on_raw_value:
+        then:
+          - lambda: "id(w_pulses) = (int) x;"
+      filters:
+        - lambda: "return ${w_start} + x * ${l_imp} / 1000.0f;"
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: 5                           # numer czujnika: encje sensor.sensmos_lora_5_*
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 5min
+  sensors:
+    - sensor: e_kwh
+      key: kwh
+      decimals: 3
+    - sensor: e_meter
+      key: w
+      decimals: 0
+    - sensor: w_m3
+      key: m3
+      decimals: 3
+    - sensor: w_meter
+      key: lh
+      decimals: 0
