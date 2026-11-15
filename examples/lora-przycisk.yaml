@@ -1,0 +1,163 @@
+# Przycisk alarmu do bliskich przez LoRa Sensmos: przy łóżku babci, w domku na działce, w warsztacie, bez Wi-Fi.
+# Przytrzymaj 2 s: płytka nadaje alarm=1 i powtarza go co minutę (najwyżej 5 razy), aż ktoś przyjmie alarm w telefonie.
+# Blueprint HA „przycisk_alarmu” (sensmos-homeassistant) wysyła powiadomienie z przyciskiem „Przyjmuję” do wybranych
+# telefonów, a po przyjęciu odsyła radiem ack=1: dioda świeci stale i brzęczyk piknie, więc wiadomo, że ktoś jedzie.
+# Dwa krótkie naciśnięcia = odwołanie (alarm=0, „wszystko w porządku”).
+# To pomoc sąsiedzka i rodzinna, NIE zastępuje numeru 112.
+#
+# Płytka: Heltec WiFi LoRa 32 V3, zasilanie z USB (płytka stale słucha potwierdzenia, na baterii wytrzyma krótko).
+# PRZYCISK: duży przycisk (np. grzybek 30 mm) między GPIO5 a GND; działa też wbudowany przycisk PRG.
+# BRZĘCZYK (opcjonalnie): aktywny brzęczyk 3,3 V między GPIO6 a GND. DIODA: biała dioda na płytce (GPIO35).
+# Odbiór i potwierdzenie: Twój nod Sensmos z radiem (id8 w hub:), w trybie Punkt, z integracją Sensmos w HA.
+#
+# W HA (sub 4): ramka „alarm=1;ack=0” w sensor.<nod>_lora_data_frame_sub_4 i zdarzenie sensmos_lora_frame;
+# przez Huba także sensor.sensmos_lora_4_alarm. Blueprint robi resztę.
+substitutions:
+  sub: "4"
+
+esphome:
+  name: przycisk-alarmu
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+globals:
+  - id: tries                      # ile razy jeszcze powtórzyć alarm bez potwierdzenia
+    type: int
+    initial_value: "0"
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą przycisku.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+output:
+  - platform: gpio
+    id: buzzer_out
+    pin: GPIO6
+
+light:
+  - platform: status_led           # dioda: miga = alarm wysłany, świeci = ktoś przyjął
+    id: led
+    pin: GPIO35
+    effects:
+      - strobe:
+          name: alarm
+
+binary_sensor:
+  - platform: gpio
+    id: big_button
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on_off: 30ms
+    on_multi_click: &clicks
+      - timing:
+          - ON for at least 2s     # przytrzymanie = alarm
+        then:
+          - script.execute: alarm_on
+      - timing:                    # dwa krótkie = odwołanie
+          - ON for at most 600ms
+          - OFF for at most 600ms
+          - ON for at most 600ms
+          - OFF for at least 300ms
+        then:
+          - script.execute: alarm_off
+  - platform: gpio                 # wbudowany przycisk PRG robi to samo
+    id: prg_button
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on_off: 30ms
+    on_multi_click: *clicks
+
+switch:
+  - platform: template             # ack=1 przychodzi radiem z HA, gdy ktoś nacisnął „Przyjmuję”
+    id: ack
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - globals.set: { id: tries, value: "0" }
+      - light.turn_on: { id: led, effect: none }
+      - output.turn_on: buzzer_out
+      - delay: 300ms
+      - output.turn_off: buzzer_out
+      - delay: 200ms
+      - output.turn_on: buzzer_out
+      - delay: 300ms
+      - output.turn_off: buzzer_out
+      - delay: 10min
+      - light.turn_off: led
+      - switch.turn_off: ack
+
+script:
+  - id: alarm_on
+    mode: restart
+    then:
+      - switch.turn_off: ack
+      - globals.set: { id: tries, value: "5" }
+      - light.turn_on: { id: led, effect: alarm }
+      - output.turn_on: buzzer_out
+      - delay: 150ms
+      - output.turn_off: buzzer_out
+      - while:
+          condition:
+            lambda: "return id(tries) > 0;"
+          then:
+            - sensmos_lora.send:
+                extra: "alarm=1"
+            - lambda: "id(tries) -= 1;"
+            - delay: 60s
+      - if:                        # 5 nadań bez odpowiedzi: dioda gaśnie, przycisk można nacisnąć znowu
+          condition:
+            switch.is_off: ack
+          then:
+            - light.turn_off: led
+  - id: alarm_off
+    then:
+      - script.stop: alarm_on
+      - globals.set: { id: tries, value: "0" }
+      - sensmos_lora.send:
+          extra: "alarm=0"
+      - light.turn_off: led
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 Twojego noda Sensmos z radiem (to on odsyła potwierdzenie)
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # fraza-klucz tego noda; w praktyce !secret sensmos_lora_key
+  update_interval: 6h              # znak życia: Hub zgłosi, gdy przycisk zamilknie (odpięty zasilacz)
+  switches:
+    - switch: ack
+      key: ack                     # polecenie z HA: c=<licznik>;ack=1

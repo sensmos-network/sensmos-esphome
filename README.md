@@ -300,6 +300,10 @@ automation:
 
 For the gate, change the message to "Someone opened the gate" and give the board its own `sub`.
 
+### Recipe: alarm button for your family
+
+[`examples/lora-przycisk.yaml`](examples/lora-przycisk.yaml): a big mushroom button by a bed, in a garden shed or a workshop, where there is no Wi-Fi. Hold it for 2 s and the board sends `alarm=1`, repeating it every minute (at most 5 times) until someone accepts. Two short presses send `alarm=0` (all fine). The board also has a switch `ack`: the Home Assistant blueprint [`przycisk_alarmu`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/przycisk_alarmu.yaml) notifies the phones you choose with an **I'm on it** action, escalates to a second group, and sends `ack=1` back by your node's radio: the LED stays on and a buzzer beeps, so the person knows help is coming. Power it from USB, because the board keeps listening for the confirmation. It is built from stock ESPHome parts (`binary_sensor` with `on_multi_click`, `script`, `status_led`, a template `switch`) plus `sensmos_lora`. This is help from family and neighbours, not an emergency service: it does not replace 112.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.
