@@ -1,0 +1,111 @@
+# Pastuch elektryczny: czy ogrodzenie „kopie”, przez LoRa Sensmos, na baterii, bez Wi-Fi na pastwisku.
+# Płytka śpi, co 10 minut budzi się na 10 sekund, liczy impulsy elektryzatora, wysyła jedną ramkę i znów zasypia.
+#
+# BEZPIECZEŃSTWO: płytka NIE dotyka drutu ogrodzenia. Impulsy łapie odbiornik indukcyjny: ok. 1 m izolowanego przewodu
+#   ułożonego wzdłuż drutu (5–10 cm od niego, na izolatorach, nigdy na drucie). Koniec przewodu → rezystor 1 MΩ → GPIO5;
+#   z GPIO5 do GND rezystor 100 kΩ i diody ochronne (np. BAT54S) do 3,3 V i do GND. Bez diod płytka nie przeżyje.
+#   Uziemienie płytki nie łącz z uziomem elektryzatora.
+# Pomiar mówi, czy elektryzator pracuje i jak często daje impuls (zwykle 40–60 na minutę). Nie mierzy kilowoltów:
+#   napięcie sprawdzaj miernikiem do pastuchów. Zero impulsów = elektryzator stoi (brak prądu, rozładowany akumulator,
+#   zerwany przewód przy elektryzatorze). Mocne zwarcie, np. gałąź na drucie, może osłabić impuls poniżej progu odbiornika.
+# ZASILANIE: ogniwo 18650 w gnieździe akumulatora Heltec V3, najlepiej z małym panelem słonecznym 5 V.
+#
+# W Home Assistant (sub 13): sensor.sensmos_lora_13_ppm (impulsy na minutę), …_fence (1 = ogrodzenie kopie), …_v (ogniwo).
+# Alarm „ogrodzenie nie kopie”: README, sekcja „Recipes”. Hub dorzuca binary_sensor.sensmos_lora_13_silent.
+substitutions:
+  sub: "13"
+  every: 10min
+  min_ppm: "20"        # mniej impulsów na minutę = ogrodzenie nie kopie
+
+esphome:
+  name: pastuch-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 10s                             # liczymy impulsy przez 10 s
+      - component.update: pulses
+      - component.update: fence_on
+      - component.update: vbat
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora
+      - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${every}
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: pulse_counter
+    id: pulses
+    pin: GPIO5
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: DISABLE
+    use_pcnt: true
+    internal_filter: 13us                      # zakłócenia krótsze od impulsu elektryzatora odpadają
+    update_interval: never                     # wynik: impulsy na minutę z 10 s liczenia
+  - platform: template
+    id: fence_on
+    update_interval: never
+    lambda: "return id(pulses).state >= ${min_ppm} ? 1.0f : 0.0f;"
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    filters:
+      - multiply: 4.9
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: pulses
+      key: ppm
+      decimals: 0
+    - sensor: fence_on
+      key: fence
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
