@@ -412,6 +412,10 @@ automation:
 
 [`examples/lora-lokalizator.yaml`](examples/lora-lokalizator.yaml): ESPHome's stock `gps` (an ATGM336H or NEO-6M powered from the board's Vext, so it is off while the board sleeps) and an SW-420 vibration sensor. Parked, it sends one frame every 6 hours as a sign of life. When someone moves it, the shock wakes the board and it sends latitude, longitude, speed and satellites about every 3 minutes for as long as it keeps moving (about 0.6% airtime at SF11, under the 1% limit). The position is encrypted with your key phrase like every other frame. In Home Assistant the Sensmos blueprint [`lokalizator`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/lokalizator.yaml) puts it on the HA map as `device_tracker.sensmos_<name>` and warns when it leaves a zone. It works where a Sensmos node hears the board: it guards the area around home, the garage or the yard, not a whole country, so check the coverage with the messenger's range test first.
 
+### Recipe: where is my tag
+
+[`examples/lora-tag.yaml`](examples/lora-tag.yaml): the Sensmos take on a Find My tag, with no GPS. A small LoRa board in a bag, a toolbox, on a bike or a dog collar sends a short frame every 6 hours, and about every 5 minutes while an SW-420 vibration sensor says it is moving. Hub 0.2.0-beta7 or newer turns every frame into `sensor.sensmos_lora_18_heard`: the id of the Sensmos node that heard it, with that node's position rounded to about 1 km, so the HA map card shows the area the tag is in. The accuracy is a node's range (often 1–3 km in a town). For metres use the [tracker recipe](#recipe-bike-trailer-or-machine-tracker) with GPS.
+
 ## Read another node's data (preview)
 
 The other direction: pull a value another node publishes and expose it as a normal ESPHome sensor — show a neighbour's air quality on a local display, drive an automation, whatever. It's a **preview, not realtime**: it polls the public map data on a long interval (default 5 min). No wallet, no subscription.

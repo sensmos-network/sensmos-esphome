@@ -1,0 +1,103 @@
+# Tag „gdzie jest” (Find My w wersji Sensmos): mała płytka LoRa w torbie, plecaku, rowerze, w obroży psa albo w skrzyni
+# narzędzi. Nie ma GPS: nadaje krótką ramkę, a Hub (0.2.0-beta7) mówi, który nod Sensmos ją usłyszał i gdzie ten nod
+# mniej więcej stoi (ok. 1 km). W Home Assistant sensor.sensmos_lora_18_heard ma pozycję i pokazuje się na karcie mapy.
+# Stoi: znak życia co 6 h. Ktoś rusza: wstrząs budzi płytkę, ramka co ok. 5 min, dopóki trwa ruch.
+# Dokładność = zasięg noda (zwykle 1–3 km w mieście): to „w której okolicy”, nie „pod którym krzakiem”. Potrzebujesz
+# metrów? Weź lokalizator z GPS (lora-lokalizator.yaml).
+#
+# RUCH: czujnik drgań SW-420 na GPIO5 (zasilanie 3,3 V). Wstrząs budzi płytkę.
+# ZASILANIE: ogniwo 18650 albo płaski LiPo w gnieździe akumulatora Heltec V3; w śnie płytka bierze bardzo mało.
+#
+# W Home Assistant (sub 18): sensor.sensmos_lora_18_mv (1 = wstrząs), …_v (ogniwo), …_heard (który nod usłyszał, z pozycją).
+substitutions:
+  sub: "18"
+  park: 6h             # postój: znak życia
+  park_ms: "21600000"  # to samo w ms (dla wyboru czasu snu)
+  moving_ms: "300000"  # w ruchu: ramka co tyle
+
+esphome:
+  name: tag-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 200ms
+      - component.update: moved
+      - component.update: vbat
+      - sensmos_lora.send:
+      - delay: 1s
+      - sx126x.set_mode_sleep: lora
+      - deep_sleep.enter:
+          id: sleepy
+          sleep_duration: !lambda |-
+            const bool go = id(moved).state > 0.5f;
+            return go ? ${moving_ms} : ${park_ms};
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${park}
+  wakeup_pin: GPIO5
+  wakeup_pin_mode: INVERT_WAKEUP               # w czasie jazdy czujnik dalej drga: czekamy na zmianę stanu
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+sensor:
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    filters:
+      - multiply: 4.9
+  - platform: template
+    id: moved
+    update_interval: never
+    lambda: |-
+      return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? 1.0f : 0.0f;
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key 
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: moved
+      key: mv
+      decimals: 0
+    - sensor: vbat
+      key: v
+      decimals: 2
