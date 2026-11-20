@@ -1,0 +1,146 @@
+# Stacja pogodowa na działce bez Wi-Fi: deszcz, wiatr, temperatura, wilgotność i ciśnienie przez LoRa Sensmos.
+# Na gotowych częściach z każdego zestawu zapasowego do stacji (Misol WH-SP-RG, WH-SP-WS01, Sparkfun SEN-15901 i
+# podobne): deszczomierz z korytkiem i wiatromierz z czaszami mają w środku zwykłe kontaktrony, więc wystarczy GPIO.
+# Odczyt idzie do Twojego Huba i do HA; dzienna suma deszczu i porywy z integracji HA (README, sekcja „Recipes”).
+#
+# DESZCZ: kontaktron deszczomierza między GPIO5 a GND. Jedno przechylenie korytka = 0,2794 mm (Misol/Sparkfun);
+#   inny deszczomierz? Zmień `rain_mm`. HA dostaje sumę od startu płytki (…_rain, mm, stan narastający), a dzienną
+#   sumę liczy licznik użytkowy HA (utility_meter, cykl daily), więc restart płytki niczego nie psuje.
+# WIATR: kontaktron wiatromierza między GPIO6 a GND. 1 impuls na sekundę = 2,4 km/h = 0,667 m/s (Misol/Sparkfun);
+#   inny wiatromierz? Zmień `wind_ms_per_hz`. HA dostaje średnią z 5 min (…_wind) i najsilniejszy poryw z 5 min (…_gust).
+# TEMPERATURA, WILGOTNOŚĆ, CIŚNIENIE: BME280 na I2C (SDA GPIO41, SCL GPIO42), w osłonie radiacyjnej (talerzyki),
+#   1,5–2 m nad trawą, nie przy ścianie.
+# ZASILANIE: płytka liczy impulsy cały czas, więc nie śpi: zasilacz 5 V albo panel słoneczny min. 6 W z dwoma
+#   ogniwami 18650 (zimą w Polsce mniejszy panel nie wystarczy).
+#
+# W Home Assistant (sub 19): sensor.sensmos_lora_19_rain (mm), …_wind i …_gust (m/s), …_t, …_h, …_p.
+# Klasy (opady, prędkość wiatru) nadaje Hub od 0.2.0-beta9.
+substitutions:
+  sub: "19"
+  every: 5min
+  rain_mm: "0.2794"
+  wind_ms_per_hz: "0.667"
+
+esphome:
+  name: pogoda-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+i2c:
+  sda: GPIO41
+  scl: GPIO42
+
+sensor:
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: ${every}
+    temperature:
+      id: temp
+    humidity:
+      id: hum
+    pressure:
+      id: pres
+  # Deszczomierz: licznik programowy (use_pcnt: false), bo kontaktron drga dłużej, niż pozwala filtr sprzętowy.
+  - platform: pulse_counter
+    pin:
+      number: GPIO5
+      mode: { input: true, pullup: true }
+    use_pcnt: false
+    internal_filter: 50ms
+    update_interval: 60s
+    internal: true
+    id: rain_rate
+    total:
+      id: rain
+      unit_of_measurement: mm
+      accuracy_decimals: 1
+      filters:
+        - multiply: ${rain_mm}
+  # Wiatromierz: impulsy na minutę z 10 s → m/s; z tego średnia i poryw z 5 min.
+  - platform: pulse_counter
+    pin:
+      number: GPIO6
+      mode: { input: true, pullup: true }
+    use_pcnt: false
+    internal_filter: 5ms
+    update_interval: 10s
+    internal: true
+    id: wind_now
+    unit_of_measurement: m/s
+    filters:
+      - lambda: return x / 60.0 * ${wind_ms_per_hz};
+  - platform: copy
+    source_id: wind_now
+    id: wind
+    internal: true
+    filters:
+      - sliding_window_moving_average:
+          window_size: 30
+          send_every: 30
+  - platform: copy
+    source_id: wind_now
+    id: gust
+    internal: true
+    filters:
+      - max:
+          window_size: 30
+          send_every: 30
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: rain
+      key: rain
+      decimals: 1
+    - sensor: wind
+      key: wind
+      decimals: 1
+    - sensor: gust
+      key: gust
+      decimals: 1
+    - sensor: temp
+      key: t
+      decimals: 1
+    - sensor: hum
+      key: h
+      decimals: 0
+    - sensor: pres
+      key: p
+      decimals: 0
