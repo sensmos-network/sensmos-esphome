@@ -1,0 +1,114 @@
+# Kotłownia albo pompa ciepła w domku, piwnicy lub budynku bez Wi-Fi: awaria, temperatury i ciśnienie przez LoRa Sensmos.
+# Prawie każdy kocioł gazowy, na pellet i każda pompa ciepła ma wyjście „awaria / alarm” (beznapięciowy styk przekaźnika,
+# w instrukcji: Störmeldung, alarm output, sygnał błędu). Płytka tylko go czyta i nic w sterowniku nie zmienia.
+#
+# AWARIA: styk awarii kotła między GPIO5 a GND (styk zwiera przy awarii; jeśli rozwiera, zmień `inverted` na false).
+#   Ramka idzie od razu przy zmianie, nie czeka na zwykły odstęp.
+# TEMPERATURY: dwa DS18B20 na jednej szynie GPIO4 (rezystor 4,7 kΩ do 3,3 V), przypięte opaską do rury zasilania
+#   (t) i powrotu (t2), pod izolacją. Która sonda jest którą: adresy z logu płytki wpisz w `address` zamiast `index`.
+# CIŚNIENIE (opcjonalne): przetwornik 0–5 bar z wyjściem 0,5–4,5 V (gwint 1/4", zasilany 5 V) przez dzielnik
+#   10 kΩ / 20 kΩ na GPIO6. Bez przetwornika usuń sensor `pressure` i jego wpis w `sensmos_lora`.
+# ZASILANIE: zasilacz 5 V z gniazdka w kotłowni (z tego samego 5 V zasilany jest przetwornik).
+#
+# W Home Assistant (sub 23): sensor.sensmos_lora_23_t i …_t2 (°C), …_bar (bar, Hub od 0.2.1-beta2), …_fault (1 = awaria)
+# i binary_sensor.sensmos_lora_23_silent, gdy płytka zamilknie (np. wybiło bezpiecznik w kotłowni).
+# Powiadomienia z gotowych automatyzacji HA: README, sekcja „Recipe: boiler room and heat pump”.
+substitutions:
+  sub: "23"
+  every: 5min
+
+esphome:
+  name: kotlownia-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+binary_sensor:
+  - platform: gpio
+    id: fault
+    internal: true
+    pin:
+      number: GPIO5
+      mode: { input: true, pullup: true }
+      inverted: true
+    filters:
+      - delayed_on_off: 5s   # krótkie drgania styku przy starcie palnika to nie awaria
+
+sensor:
+  - platform: dallas_temp
+    id: t_flow
+    index: 0                 # albo address: 0x… z logu, wtedy sondy się nie zamienią
+    update_interval: ${every}
+  - platform: dallas_temp
+    id: t_return
+    index: 1
+    update_interval: ${every}
+  - platform: adc
+    id: pressure
+    pin: GPIO6
+    attenuation: 12db
+    samples: 16
+    update_interval: ${every}
+    filters:
+      - multiply: 1.5          # dzielnik 10k/20k: z powrotem na napięcie przetwornika
+      - calibrate_linear:      # 0,5 V = 0 bar, 4,5 V = 5 bar (inny zakres? zmień 5.0)
+          - 0.5 -> 0.0
+          - 4.5 -> 5.0
+      - clamp:
+          min_value: 0
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: t_flow
+      key: t
+      decimals: 1
+    - sensor: t_return
+      key: t2
+      decimals: 1
+    - sensor: pressure
+      key: bar
+      decimals: 2
+  binary_sensors:
+    - sensor: fault
+      key: fault

@@ -1,0 +1,124 @@
+# Wodomierz i ciepłomierz radiowy (wM-Bus 868 MHz) z klatki schodowej albo piwnicy, bez Wi-Fi, przez LoRa Sensmos.
+# Większość nowych wodomierzy i ciepłomierzy w blokach (Apator, Diehl IZAR, Kamstrup, Sensus, Sharky i inne) co kilka
+# do kilkunastu sekund nadaje swój stan w wireless M-Bus (tryb T1 albo C1, 868,95 MHz) dla inkasenta. Ta płytka
+# słucha go gotowym komponentem ESPHome wmbus_meter (SzczepanLeon/esphome-components, sterowniki z wmbusmeters)
+# i co 15 min wysyła stan licznika do Twojego Huba, a Hub daje go panelowi Energia w HA. Płytka tylko słucha,
+# licznika nie zmienia i nic do niego nie nadaje.
+#
+# PŁYTKA: Heltec V3 (jego radio SX1262 zostaje dla Sensmos) + moduł CC1101 na 868 MHz (wersja z anteną 868, nie 433)
+#   na drugiej szynie SPI: SCK GPIO4, MOSI GPIO5, MISO GPIO6, CSN GPIO7, GDO0 GPIO2, VCC 3,3 V, GND.
+# NUMER LICZNIKA: z tabliczki wodomierza albo z logu płytki. Telegram licznika, którego nie ma na liście, log pokazuje
+#   jako „Telegram with address 12345678 …” z linkiem do wmbusmeters.org/analyze, który mówi, jaki to licznik.
+#   Wpisz swój numer w `water_id` (z 0x na początku). Liczniki sąsiadów płytka pomija.
+# KLUCZ: część liczników szyfruje odczyt (AES). Klucz daje zarządca budynku albo dostawca wody; bez klucza zostaw
+#   same zera, wtedy działa tylko z licznikami, które nadają bez szyfrowania.
+# CIEPŁOMIERZ (opcjonalny): odkomentuj bloki `heat` niżej i wpisz jego numer.
+# ZASILANIE: płytka słucha cały czas, więc zasilacz 5 V z gniazdka w piwnicy albo na klatce.
+#
+# W Home Assistant (sub 21): sensor.sensmos_lora_21_m3 (m³, licznik narastający do panelu Energia → Woda),
+# …_rssi (jak dobrze płytka słyszy licznik, w dBm) i opcjonalnie …_kwh (ciepło). Klasy nadaje Hub (klucze m3 i kwh).
+substitutions:
+  sub: "21"
+  every: 15min
+  water_id: "0x12345678"
+  water_key: "00000000000000000000000000000000"
+
+esphome:
+  name: wodomierz-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+  - source: github://SzczepanLeon/esphome-components@main
+    components: [wmbus_radio, wmbus_meter, wmbus_common]
+
+spi:
+  - id: spi_lora
+    clk_pin: GPIO9
+    mosi_pin: GPIO10
+    miso_pin: GPIO11
+  - id: spi_wmbus
+    clk_pin: GPIO4
+    mosi_pin: GPIO5
+    miso_pin: GPIO6
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  spi_id: spi_lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+# Odbiornik wM-Bus: CC1101 na 868,95 MHz, tylko słucha.
+wmbus_radio:
+  radio_type: CC1101
+  spi_id: spi_wmbus
+  cs_pin: GPIO7
+  irq_pin: GPIO2
+  frequency: 868.950MHz
+
+wmbus_meter:
+  - id: water
+    meter_id: ${water_id}
+    type: auto
+    key: ${water_key}
+    mode: [T1, C1]
+  # - id: heat
+  #   meter_id: 0x87654321
+  #   type: auto
+  #   mode: [T1, C1]
+
+sensor:
+  - platform: wmbus_meter
+    parent_id: water
+    field: total_m3
+    id: water_m3
+    internal: true
+    accuracy_decimals: 3
+  - platform: wmbus_meter
+    parent_id: water
+    field: rssi_dbm
+    id: water_rssi
+    internal: true
+  # - platform: wmbus_meter
+  #   parent_id: heat
+  #   field: total_energy_consumption_kwh
+  #   id: heat_kwh
+  #   internal: true
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: water_m3
+      key: m3
+      decimals: 3
+    - sensor: water_rssi
+      key: rssi
+      decimals: 0
+    # - sensor: heat_kwh
+    #   key: kwh
+    #   decimals: 0

@@ -1,0 +1,139 @@
+# Płytka na baterii, która przyjmuje polecenia z Home Assistant: słucha tylko chwilę po każdej swojej ramce.
+# Płytka śpiąca na ogniwie nie słyszy radia, więc zwykłe `switches:` (lora-przelacznik.yaml) na niej nie działają.
+# Tu płytka budzi się co 30 min, wysyła odczyt i przez `listen` (30 s) słucha kanału domowego. Blueprint HA
+# `polecenie_po_wybudzeniu` widzi tę ramkę i od razu odsyła przez Twój nod z LoRa czekające polecenie, a płytka
+# potwierdza je następną ramką. Polecenie dociera więc najpóźniej po jednym odstępie (`every`), bez stałego zasilania.
+#
+# PRZYKŁAD: przełącznik `fast` (szybkie raporty). Włączony z HA = płytka budzi się co `fast_every` (2 min) zamiast
+# co 30 min, np. gdy chcesz popatrzeć na temperaturę w domku na żywo. Blueprint wyłącza go sam po godzinie; gdyby HA
+# milczało, płytka po `fast_max` wybudzeniach (1,5 h) i tak wraca do 30 min, żeby nie wyczerpać ogniwa. Ten sam wzór pasuje do innych ustawień płytki na baterii (np. uzbrojenie skrzynki na listy).
+# Stan przełącznika przeżywa sen (pamięć flash płytki, zapis tylko przy zmianie).
+# CZUJNIK: DS18B20 na GPIO4 (z rezystorem 4,7 kΩ do 3,3 V); bateria przez dzielnik Heltec V3 na GPIO1.
+# ZASILANIE: ogniwo 18650. 30 s słuchania co 30 min to średnio poniżej 1 mA: kilka miesięcy na 3000 mAh.
+#
+# W Home Assistant (sub 22): sensor.sensmos_lora_22_t, …_v i …_fast (1 = szybkie raporty). Każda ramka niesie stan
+# `fast=1/0`, z niego blueprint wie, czy polecenie już dotarło.
+substitutions:
+  sub: "22"
+  every: 30min
+  fast_every: 2min
+  fast_max: "45"      # bezpiecznik: tyle szybkich wybudzeń (45 × 2 min = 1,5 h), potem płytka wraca sama do `every`
+  listen: 30s
+
+esphome:
+  name: uspiona-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - component.update: temp
+      - component.update: vbat
+      - sensmos_lora.send:
+      # Okno na polecenie: ramka idzie przez nod do HA, blueprint odsyła polecenie, nod nadaje je radiem.
+      - delay: ${listen}
+      - if:
+          condition:
+            switch.is_on: fast
+          then:
+            - lambda: |-
+                if (id(fast_left) > 0) id(fast_left)--;
+                if (id(fast_left) == 0) id(fast).turn_off();
+      - sx126x.set_mode_sleep: lora
+      - if:
+          condition:
+            switch.is_on: fast
+          then:
+            - deep_sleep.enter:
+                id: sleepy
+                sleep_duration: ${fast_every}
+          else:
+            - deep_sleep.enter: sleepy
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+preferences:
+  flash_write_interval: 0s   # zapis od razu przy zmianie, bo płytka zaraz zasypia
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${every}
+
+globals:
+  - id: fast_left            # ile szybkich wybudzeń zostało (w pamięci flash, przeżywa sen)
+    type: int
+    restore_value: true
+    initial_value: "0"
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+switch:
+  - platform: template
+    id: fast
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:                # także przy przywróceniu stanu po śnie, więc licznik ustawia tylko od zera
+      - lambda: if (id(fast_left) == 0) id(fast_left) = ${fast_max};
+
+sensor:
+  - platform: dallas_temp
+    id: temp
+    update_interval: never
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    update_interval: never
+    filters:
+      - multiply: 4.9
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego noda z LoRa (polecenia nadaje nod, nie Hub)
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: 24h             # ramki wysyła on_boot; to tylko zapas
+  sensors:
+    - sensor: temp
+      key: t
+      decimals: 1
+    - sensor: vbat
+      key: v
+      decimals: 2
+  switches:
+    - switch: fast
+      key: fast

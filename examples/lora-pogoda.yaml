@@ -14,7 +14,7 @@
 #   ogniwami 18650 (zimą w Polsce mniejszy panel nie wystarczy).
 #
 # W Home Assistant (sub 19): sensor.sensmos_lora_19_rain (mm), …_wind i …_gust (m/s), …_t, …_h, …_p.
-# Klasy (opady, prędkość wiatru) nadaje Hub od 0.2.0-beta9.
+# Klasy (opady, prędkość wiatru) nadaje Hub od 0.2.1-beta1.
 substitutions:
   sub: "19"
   every: 5min

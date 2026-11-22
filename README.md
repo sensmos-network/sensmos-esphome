@@ -306,7 +306,7 @@ For the gate, change the message to "Someone opened the gate" and give the board
 
 ### Recipe: greenhouse and garden watering
 
-[`examples/lora-szklarnia.yaml`](examples/lora-szklarnia.yaml): a capacitive soil moisture sensor (in %, calibrated with two readings: dry air and a glass of water), a DS18B20 and a 12 V normally closed solenoid valve on a relay, all on stock ESPHome parts. Readings go to Home Assistant at home, and the valve is a `switches:` entry, so HA opens it by your node's radio, as in [Switches over radio](#switches-over-radio). The board closes the valve by itself after `max_open` (20 min), even if the radio goes quiet, and always starts closed. It keeps listening, so it needs steady power (mains or a solar panel with a battery). You get `sensor.sensmos_lora_10_soil`, `…_t`, and the valve state `valve=1/0` in `sensor.<node>_lora_data_frame_sub_10`.
+[`examples/lora-szklarnia.yaml`](examples/lora-szklarnia.yaml): a capacitive soil moisture sensor (in %, calibrated with two readings: dry air and a glass of water), a DS18B20 and a 12 V normally closed solenoid valve on a relay, all on stock ESPHome parts. Readings go to Home Assistant at home, and the valve is a `switches:` entry, so HA opens it by your node's radio, as in [Switches over radio](#switches-over-radio). The board closes the valve by itself after `max_open` (20 min), even if the radio goes quiet, and always starts closed. It keeps listening, so it needs steady power (mains or a solar panel with a battery). You get `sensor.sensmos_lora_10_soil`, `…_t`, and the valve state `valve=1/0` in `sensor.<node>_lora_data_frame_sub_10`. For watering that skips wet soil, today's rain and rain in the forecast, use the blueprint [`podlewanie`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/podlewanie.yaml) (it confirms opening and closing over radio).
 
 ```yaml
 template:
@@ -410,7 +410,7 @@ automation:
 
 ### Recipe: garden weather station
 
-[`examples/lora-pogoda.yaml`](examples/lora-pogoda.yaml): rain, wind, temperature, humidity and pressure from an allotment with no Wi-Fi, on the stock spare parts of any hobby weather station (Misol WH-SP-RG rain gauge, WH-SP-WS01 anemometer, Sparkfun SEN-15901 and similar: plain reed switches, so a GPIO each) and a BME280 in a radiation shield. ESPHome's `pulse_counter` counts the rain bucket tips (0.2794 mm each) and the anemometer pulses (1 Hz = 0.667 m/s); `copy` sensors give the 5-minute mean wind and the strongest gust. The board counts all the time, so it runs from a 5 V supply or a solar panel of 6 W or more with two 18650 cells. You get `sensor.sensmos_lora_19_rain` (mm, growing total), `…_wind` and `…_gust` (m/s), `…_t`, `…_h` and `…_p`; Hub 0.2.0-beta9 or newer gives them the precipitation and wind speed classes. The day's rain comes from a stock `utility_meter`:
+[`examples/lora-pogoda.yaml`](examples/lora-pogoda.yaml): rain, wind, temperature, humidity and pressure from an allotment with no Wi-Fi, on the stock spare parts of any hobby weather station (Misol WH-SP-RG rain gauge, WH-SP-WS01 anemometer, Sparkfun SEN-15901 and similar: plain reed switches, so a GPIO each) and a BME280 in a radiation shield. ESPHome's `pulse_counter` counts the rain bucket tips (0.2794 mm each) and the anemometer pulses (1 Hz = 0.667 m/s); `copy` sensors give the 5-minute mean wind and the strongest gust. The board counts all the time, so it runs from a 5 V supply or a solar panel of 6 W or more with two 18650 cells. You get `sensor.sensmos_lora_19_rain` (mm, growing total), `…_wind` and `…_gust` (m/s), `…_t`, `…_h` and `…_p`; Hub 0.2.1-beta1 or newer gives them the precipitation and wind speed classes. The day's rain comes from a stock `utility_meter`:
 
 ```yaml
 utility_meter:
@@ -421,6 +421,28 @@ automation:
   - alias: Strong wind at the allotment
     trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_19_gust, above: 15 }
     action: { service: notify.mobile_app_phone, data: { message: "Gusts {{ states('sensor.sensmos_lora_19_gust') }} m/s at the allotment: check the greenhouse and the trampoline" } }
+```
+
+### Recipe: radio water and heat meters (wM-Bus)
+
+[`examples/lora-wodomierz.yaml`](examples/lora-wodomierz.yaml): most new water and heat meters in blocks of flats (Apator, Diehl IZAR, Kamstrup, Sensus, Sharky and others) broadcast their reading every few seconds in wireless M-Bus on 868.95 MHz for the meter reader. The board hears your meter with the community component [`wmbus_meter`](https://github.com/SzczepanLeon/esphome-components) (drivers from wmbusmeters) on a cheap CC1101 868 MHz module wired to a second SPI bus of a Heltec V3, whose own SX1262 stays on the Sensmos channel, and sends the total every 15 minutes. It only listens: the meter is never touched. Put your meter number in `water_id` (a meter that is not on the list shows in the log with its address and a wmbusmeters.org/analyze link that names the type). Some meters encrypt the reading: the AES key comes from the building manager or the water company. You get `sensor.sensmos_lora_21_m3` (m³, `total_increasing`, so it goes straight into the Energy dashboard as water), `…_rssi` and, with a heat meter, `…_kwh`. Mains powered, since the board listens all the time. The wM-Bus part is a third-party component: we checked the Sensmos side and the field names against its drivers, but not every meter model.
+
+### Recipe: commands for a board on a battery
+
+A board that sleeps on a cell cannot hear `switches:` commands. [`examples/lora-uspiona.yaml`](examples/lora-uspiona.yaml) listens for 30 s after each of its frames instead. The Home Assistant blueprint [`polecenie_po_wybudzeniu`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/polecenie_po_wybudzeniu.yaml) keeps the command you set on an `input_boolean` helper and sends it through your node with LoRa as soon as the board's frame arrives, so it lands within one wake-up interval and comes back confirmed in the next frame. The example's switch `fast` makes the board report every 2 minutes instead of 30 (to watch a cabin warm up live); the blueprint switches it off after an hour, and the board falls back by itself after 1.5 hours even if HA is silent. About 30 s of listening every 30 minutes keeps an 18650 going for months. You get `sensor.sensmos_lora_22_t`, `…_v` and `…_fast`.
+
+### Recipe: boiler room and heat pump
+
+[`examples/lora-kotlownia.yaml`](examples/lora-kotlownia.yaml): almost every gas or pellet boiler and every heat pump has a volt-free fault output. The board reads it on GPIO5 (sent at once when it changes), two DS18B20 probes strapped to the flow and return pipes and, optionally, a 0–5 bar transducer (0.5–4.5 V) for the system pressure. It only reads, it never controls the boiler. You get `sensor.sensmos_lora_23_t`, `…_t2` (°C), `…_bar` (bar, Hub 0.2.1-beta2 or newer), `…_fault` (1 = fault), and the hub's `binary_sensor.sensmos_lora_23_silent` when the boiler room loses power. Alerts from stock HA:
+
+```yaml
+automation:
+  - alias: Boiler fault
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_23_fault, above: 0.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "The boiler reports a fault", data: { priority: high } } }
+  - alias: Heating pressure low
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_23_bar, below: 1.0, for: "00:15:00" }
+    action: { service: notify.mobile_app_phone, data: { message: "Heating pressure {{ states('sensor.sensmos_lora_23_bar') }} bar: top up the system" } }
 ```
 
 ### Recipe: bike, trailer or machine tracker
