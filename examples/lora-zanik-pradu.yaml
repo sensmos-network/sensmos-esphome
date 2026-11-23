@@ -1,0 +1,132 @@
+# Zanik prądu na działce, w domku, kotłowni albo przy pompie w studzience: alarm przez LoRa Sensmos, także bez Wi-Fi.
+# Gdy prądu nie ma, nie ma też routera, więc czujnik Wi-Fi milczy dokładnie wtedy, kiedy jest potrzebny. Ta płytka
+# jest zasilana z ładowarki USB w gniazdku i ma zapasowe ogniwo 18650 na złączu baterii Heltec V3. Zanik prądu
+# zgłasza od razu, a potem śpi na ogniwie i co 15 min wysyła znak życia (z napięciem ogniwa), aż prąd wróci.
+# Powrót prądu budzi ją od razu (pin GPIO7) i znów idzie ramka.
+#
+# WYKRYWANIE PRĄDU: 5 V z ładowarki (pin 5V/VBUS płytki) przez dzielnik 10 kΩ / 20 kΩ na GPIO7 (ok. 3,3 V, gdy jest
+#   prąd, 0 V, gdy nie ma). GPIO7 może budzić płytkę ze snu.
+# TEMPERATURA (opcjonalna): DS18B20 na GPIO4 (rezystor 4,7 kΩ do 3,3 V), np. w zamrażarce w domku: po zaniku prądu
+#   widać, jak szybko się ogrzewa. Bez sondy usuń sensor `temp` i jego wpis w `sensmos_lora`.
+# ZASILANIE: ładowarka USB 5 V + ogniwo 18650 (z ładowarką płytki). Ze snu co 15 min ogniwo starcza na tygodnie.
+#
+# W Home Assistant (sub 24): sensor.sensmos_lora_24_mains (1 = jest prąd, 0 = zanik), …_v (ogniwo), …_t
+# i binary_sensor.sensmos_lora_24_silent, gdy płytka zamilknie zupełnie (wyczerpane ogniwo, kradzież).
+# Powiadomienie i czas trwania zaniku z gotowych automatyzacji HA: README, sekcja „Recipe: power cut at the allotment”.
+substitutions:
+  sub: "24"
+  every: 5min          # odstęp ramek, gdy jest prąd
+  on_battery: 15min    # znak życia ze snu, gdy prądu nie ma
+
+esphome:
+  name: zanik-pradu-lora
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - component.update: vbat
+      - component.update: temp
+      - sensmos_lora.send:
+      - if:
+          condition:              # stan pinu wprost (filtr binary_sensor czeka 10 s)
+            lambda: "return gpio_get_level(GPIO_NUM_7) == 0;"
+          then:
+            - script.execute: sleep_on_battery
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+deep_sleep:
+  id: sleepy
+  sleep_duration: ${on_battery}
+  wakeup_pin:
+    number: GPIO7
+    allow_other_uses: true
+  wakeup_pin_mode: KEEP_AWAKE   # gdy prąd wrócił przed zaśnięciem, płytka nie zasypia
+
+script:
+  - id: sleep_on_battery
+    mode: single
+    then:
+      - delay: 3s                  # ramka o zaniku zdąży wyjść
+      - sx126x.set_mode_sleep: lora
+      - deep_sleep.enter: sleepy
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+binary_sensor:
+  - platform: gpio
+    id: mains
+    internal: true
+    pin:
+      number: GPIO7
+      allow_other_uses: true
+    filters:
+      - delayed_off: 10s           # mrugnięcie sieci to jeszcze nie zanik
+    on_release:
+      - sensmos_lora.send:         # od razu, bez czekania na zwykły odstęp zmian
+      - script.execute: sleep_on_battery
+
+sensor:
+  - platform: adc
+    id: vbat
+    pin: GPIO1
+    attenuation: 12db
+    samples: 16
+    update_interval: ${every}
+    filters:
+      - multiply: 4.9
+  - platform: dallas_temp
+    id: temp
+    update_interval: ${every}
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: vbat
+      key: v
+      decimals: 2
+    - sensor: temp
+      key: t
+      decimals: 1
+  binary_sensors:
+    - sensor: mains
+      key: mains

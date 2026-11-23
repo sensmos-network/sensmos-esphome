@@ -1,0 +1,138 @@
+# Pompa w studni, hydrofor, pompa w szambie albo w studzience drenażowej: praca, włączenia i czas pracy przez LoRa Sensmos.
+# Pompa, która chodzi za długo (sucha studnia, pęknięta rura, zawór zwrotny) albo włącza się co kilka minut
+# (cieknący zbiornik ciśnieniowy, przeciek w instalacji), zwykle psuje się dopiero po kilku dniach takiej pracy.
+# Ta płytka słucha prądu pompy cęgami (bez ruszania instalacji) i mówi o tym od razu, z miejsca bez Wi-Fi.
+#
+# CĘGI: przekładnik SCT-013-030 (30 A, wyjście 1 V) na JEDEN przewód zasilania pompy (fazę, nie cały kabel), wtyk
+#   jack przez układ z dwoma rezystorami 10 kΩ i kondensatorem 10 µF (połowa 3,3 V) na GPIO2, jak w dokumentacji
+#   ESPHome ct_clamp. Kalibracja: porównaj z miernikiem cęgowym i zmień `amps_per_volt`.
+# PRÓG: pompa „pracuje”, gdy płynie więcej niż `run_a` (0,5 A).
+# ZASILANIE: zasilacz 5 V z gniazdka przy pompie. Prace przy 230 V tylko przy wyłączonym bezpieczniku, a najlepiej
+#   przez elektryka; cęgi zakłada się na izolowany przewód, bez rozcinania żył.
+#
+# W Home Assistant (sub 25): sensor.sensmos_lora_25_w (moc w W, Hub: klasa power), …_run (1 = pracuje, od razu przy
+# zmianie), …_starts (włączenia od startu płytki), …_runmin (minuty pracy od startu płytki). Dzienne liczby
+# i alarmy z gotowych automatyzacji HA: README, sekcja „Recipe: pump in a well or a sump”.
+substitutions:
+  sub: "25"
+  every: 5min
+  amps_per_volt: "30"
+  run_a: "0.5"
+  volts: "230"
+
+esphome:
+  name: pompa-lora
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://sensmos-network/sensmos-esphome@main
+    components: [sensmos_lora]
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# Kanał domowy Sensmos (Europa). Tych wartości nie zmieniaj, inaczej nody nie usłyszą płytki.
+sx126x:
+  id: lora
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  modulation: LORA
+  frequency: 868.1MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 11
+  coding_rate: CR_4_5
+  sync_value: [0x34, 0x44]
+  preamble_size: 8
+  crc_enable: true
+  pa_power: 14
+
+globals:
+  - id: starts_n
+    type: int
+    restore_value: true
+    initial_value: "0"
+  - id: run_min_n
+    type: int
+    restore_value: true
+    initial_value: "0"
+
+sensor:
+  - platform: adc
+    id: ct_adc
+    pin: GPIO2
+    attenuation: 12db
+    update_interval: never     # próbki bierze ct_clamp
+  - platform: ct_clamp
+    sensor: ct_adc
+    id: amps
+    internal: true
+    sample_duration: 200ms
+    update_interval: 5s
+    filters:
+      - multiply: ${amps_per_volt}
+  - platform: template
+    id: watts
+    update_interval: ${every}
+    lambda: "return id(amps).state * ${volts};"
+    filters:
+      - lambda: "return x < 5 ? 0 : x;"   # szum cęgów bez obciążenia
+  - platform: template
+    id: starts
+    update_interval: ${every}
+    lambda: "return (float) id(starts_n);"
+  - platform: template
+    id: run_min
+    update_interval: ${every}
+    lambda: "return (float) id(run_min_n);"
+
+binary_sensor:
+  - platform: template
+    id: running
+    internal: true
+    lambda: "return id(amps).state > ${run_a};"
+    filters:
+      - delayed_on: 10s          # rozruch i drgania przekaźnika ciśnieniowego
+      - delayed_off: 10s
+    on_press:
+      - lambda: id(starts_n) += 1;
+
+interval:
+  - interval: 1min
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: running
+          then:
+            - lambda: id(run_min_n) += 1;
+
+sensmos_lora:
+  hub: "a1b2c3d4"                  # id8 twojego Huba albo noda
+  sub: ${sub}
+  key: "zmien-mnie-na-swoja-fraze"  # w praktyce: !secret sensmos_lora_key
+  update_interval: ${every}
+  sensors:
+    - sensor: watts
+      key: w
+      decimals: 0
+    - sensor: starts
+      key: starts
+      decimals: 0
+    - sensor: run_min
+      key: runmin
+      decimals: 0
+  binary_sensors:
+    - sensor: running
+      key: run

@@ -445,6 +445,38 @@ automation:
     action: { service: notify.mobile_app_phone, data: { message: "Heating pressure {{ states('sensor.sensmos_lora_23_bar') }} bar: top up the system" } }
 ```
 
+### Recipe: power cut at the allotment
+
+[`examples/lora-zanik-pradu.yaml`](examples/lora-zanik-pradu.yaml): when the power goes, the router goes too, so a Wi-Fi sensor falls silent exactly when you need it. This board runs from a USB charger with a spare 18650 cell on the Heltec V3 battery connector, and senses the charger's 5 V through a 10 kΩ / 20 kΩ divider on GPIO7. A power cut is sent at once (`mains=0`); then the board sleeps on the cell and sends a sign of life with the cell voltage every 15 minutes, for weeks. When the power comes back, GPIO7 wakes it and `mains=1` goes out at once. An optional DS18B20 shows how fast a freezer in the cabin warms up. You get `sensor.sensmos_lora_24_mains`, `…_v`, `…_t`, and the hub's `binary_sensor.sensmos_lora_24_silent` if the cell runs flat. Stock HA:
+
+```yaml
+automation:
+  - alias: Power cut at the allotment
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_24_mains, below: 0.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "No power at the allotment (cell {{ states('sensor.sensmos_lora_24_v') }} V)" } }
+  - alias: Power back at the allotment
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_24_mains, above: 0.5 }
+    action: { service: notify.mobile_app_phone, data: { message: "Power is back at the allotment" } }
+```
+
+### Recipe: pump in a well or a sump
+
+[`examples/lora-pompa.yaml`](examples/lora-pompa.yaml): a pump that runs too long (dry well, burst pipe, stuck check valve) or starts every few minutes (leaking pressure tank, a leak in the pipes) usually breaks only after days of it. A split-core current transformer SCT-013-030 on one wire of the pump (no cutting, no rewiring) feeds ESPHome's stock `ct_clamp` on GPIO2 through the usual two-resistor bias. The board sends the power in W, `run` (1 while the pump runs, sent at once when it changes), `starts` and `runmin` (counts since the board started, kept across restarts). You get `sensor.sensmos_lora_25_w`, `…_run`, `…_starts`, `…_runmin`. Work on 230 V only with the breaker off, or let an electrician do it. Stock HA:
+
+```yaml
+utility_meter:
+  pump_starts_hour:
+    source: sensor.sensmos_lora_25_starts
+    cycle: hourly
+automation:
+  - alias: Pump running too long
+    trigger: { platform: numeric_state, entity_id: sensor.sensmos_lora_25_run, above: 0.5, for: "00:20:00" }
+    action: { service: notify.mobile_app_phone, data: { message: "The pump has been running for 20 minutes: dry well or a leak?", data: { priority: high } } }
+  - alias: Pump starts too often
+    trigger: { platform: numeric_state, entity_id: sensor.pump_starts_hour, above: 10 }
+    action: { service: notify.mobile_app_phone, data: { message: "The pump started more than 10 times this hour: check the pressure tank" } }
+```
+
 ### Recipe: bike, trailer or machine tracker
 
 [`examples/lora-lokalizator.yaml`](examples/lora-lokalizator.yaml): ESPHome's stock `gps` (an ATGM336H or NEO-6M powered from the board's Vext, so it is off while the board sleeps) and an SW-420 vibration sensor. Parked, it sends one frame every 6 hours as a sign of life. When someone moves it, the shock wakes the board and it sends latitude, longitude, speed and satellites about every 3 minutes for as long as it keeps moving (about 0.6% airtime at SF11, under the 1% limit). The position is encrypted with your key phrase like every other frame. In Home Assistant the Sensmos blueprint [`lokalizator`](https://github.com/sensmos-network/sensmos-homeassistant/blob/main/blueprints/automation/sensmos/lokalizator.yaml) puts it on the HA map as `device_tracker.sensmos_<name>` and warns when it leaves a zone. It works where a Sensmos node hears the board: it guards the area around home, the garage or the yard, not a whole country, so check the coverage with the messenger's range test first.
